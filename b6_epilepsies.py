@@ -879,6 +879,7 @@ class KASP():
         # Ensure omitted wells have NaN for cluster & labels
         data.loc[~valid_wells, ['Cluster', 'Genotype']] = np.nan
 
+
     def plot_allele_and_well_plate(self, box_id):
         data = self.plates[box_id]
 
@@ -988,8 +989,33 @@ class KASP():
         #         for row, cols in sorted(wells.items()):  # Sort rows alphabetically
         #             print(f"  {row}: {', '.join(map(str, cols))}")
 
+    # def save_geno_file(self):
+    #     merged_data = pd.DataFrame()
+    #
+    #     for box_id, data in self.plates.items():
+    #         # print(box_id, data[['Well Position','Genotype']])
+    #         temp        = data[['Well Position','Genotype']]
+    #         temp['box'] = box_id
+    #         merged_data.concat(temp)
+    #
+    #     merged_data.columns = ['well', 'genotype', 'box']
+    #     return None
 
-    def produce_geno_file(self, output_file):
+    def save_geno_file(self):
+        merged_data = []  # Use a list to store individual DataFrames
+
+        for box_id, data in self.plates.items():
+            temp = data[['Well Position', 'Genotype']].copy()  # Avoid SettingWithCopyWarning
+            temp['box'] = box_id  # Add box identifier
+            merged_data.append(temp)  # Append to list
+
+        merged_data = pd.concat(merged_data, ignore_index=True)  # Combine all into a single DataFrame
+        merged_data.columns = ['well', 'genotype', 'box']
+        print(merged_data)  # Check the output
+        # TODO Change the omitted, dropped to excluded and also empty rather than nan
+        return merged_data  # Return DataFrame instead of None
+
+    def produce_geno_file_SA(self, output_file):
         """
         FOR MATLAB Sleep Analysis.Generate genotype text files from the interpreted data.
 
