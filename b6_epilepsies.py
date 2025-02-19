@@ -84,6 +84,8 @@ class Experiment:
 
         genotype_df = pd.concat(df_list, ignore_index=True)
 
+        print(genotype_df)
+
         return genotype_df
 
     def get_condition_df(self):
@@ -634,14 +636,6 @@ class MiddurData(Experiment): #The output is not compatible with sleep analysis
             # Turn off axis for cleaner presentation
             # ax.axis('off')
 
-        #Add faint lines to outline the plate boundary
-        # for ax in axes[:, 0]:
-        #     ax.spines['left'].set_color('lightgrey')
-        #     ax.spines['left'].set_linewidth(0.5)
-        # for ax in axes[-1, :]:
-        #     ax.spines['bottom'].set_color('lightgrey')
-        #     ax.spines['bottom'].set_linewidth(0.5)
-
         # Add a legend for genotype colors with counts
         handles = [
             plt.Line2D(
@@ -812,133 +806,62 @@ class MiddurData_SA(Experiment): #The output is compatible with sleep analysis
 
         return merged_df
 
-# class KASP():
-#     def __init__(self, csv_file, omitted_wells=None, drop_wells=None):
-#         self.csv_file = csv_file
-#         self.omitted_wells = set(omitted_wells or [])
-#         self.drop_wells = set(drop_wells or [])
-#         self.data = self.load_data()
-#
-#         self.plot_allele_and_well_plate()
-#
-#     def load_data(self):
-#         """Loads and preprocesses the data from the CSV file."""
-#         data = pd.read_csv(self.csv_file, skiprows=23,
-#                            usecols=["Well", "Well Position", "Sample", "Task",
-#                                     "Confidence", "Allele 1", "Allele 2", "Call"])
-#         return data[~data['Well Position'].isin(self.drop_wells)]
-#
-#     def perform_clustering(self):
-#         """Clusters the data into WT, HET, and HOM using K-means."""
-#         X = self.data[['Allele 1', 'Allele 2']]
-#         X_scaled = StandardScaler().fit_transform(X)
-#         kmeans = KMeans(n_clusters=3, n_init=10, random_state=42)
-#         self.data['Cluster'] = kmeans.fit_predict(X_scaled)
-#
-#         # Sort clusters based on Allele 1 mean values
-#         cluster_means = self.data.groupby('Cluster')['Allele 1'].mean()
-#         sorted_clusters = np.argsort(cluster_means.values)
-#         cluster_order = {sorted_clusters[2]: 'WT', sorted_clusters[1]: 'HET', sorted_clusters[0]: 'HOM'}
-#         self.data['Cluster Label'] = self.data['Cluster'].map(cluster_order)
-#
-#     def plot_allele_and_well_plate(self):
-#         """Generates allele discrimination and 96-well plate plots."""
-#         self.perform_clustering()
-#         file_name = Path(self.csv_file).stem
-#         updated_colors = {'WT': '#ff7f0e', 'HET': '#2ca02c', 'HOM': '#1f77b4'}
-#         self.data['Color'] = self.data['Cluster Label'].map(updated_colors)
-#
-#         fig, axs = plt.subplots(1, 2, figsize=(20, 6))
-#
-#         # Allele Discrimination Plot
-#         ax1 = axs[0]
-#         ax1.scatter(self.data['Allele 1'], self.data['Allele 2'], c=self.data['Color'])
-#         for i, txt in enumerate(self.data['Well Position']):
-#             ax1.annotate(txt, (self.data['Allele 1'].iloc[i], self.data['Allele 2'].iloc[i]), fontsize=8)
-#         ax1.set(title=f'{file_name}: Allele Discrimination Plot', xlabel='Allele 1', ylabel='Allele 2')
-#         ax1.grid(True)
-#
-#         # 96-Well Plate Visualization
-#         ax2 = axs[1]
-#         rows, columns = list('ABCDEFGH'), list(range(1, 13))
-#         for row_label in rows:
-#             for col_label in columns:
-#                 well_pos = f"{row_label}{col_label}"
-#                 color = 'white'  # Default for empty wells
-#                 if well_pos in self.data['Well Position'].values:
-#                     row = self.data[self.data['Well Position'] == well_pos].iloc[0]
-#                     color = 'black' if well_pos in self.omitted_wells else updated_colors[row['Cluster Label']]
-#                 ax2.add_patch(mpatches.Rectangle((col_label - 1, rows.index(row_label)), 1, 1, facecolor=color, edgecolor='black'))
-#         ax2.set(xlim=(0, 12), ylim=(0, 8), xticks=np.arange(12) + 0.5, yticks=np.arange(8) + 0.5,
-#                 xticklabels=columns, yticklabels=rows, title=f'{file_name}: 96-Well Plate Calls')
-#         ax2.invert_yaxis()
-#
-#         # Legend
-#         legend_patches = [mpatches.Patch(color=updated_colors[label], label=label) for label in updated_colors]
-#         if self.omitted_wells:
-#             legend_patches.append(mpatches.Patch(color='black', label='Omitted'))
-#         legend_patches.append(mpatches.Patch(color='white', label='Empty'))
-#         ax2.legend(handles=legend_patches, loc='upper right')
-#
-#         plt.tight_layout()
-#         plt.show()
-#
-#
-#     def get_grouped_well_lists(self):
-#         """Returns grouped wells as a dictionary sorted by genotype."""
-#         valid_wells = set(self.data['Well Position']) - self.omitted_wells - self.drop_wells
-#         group_wells = {label: self.data[(self.data['Cluster Label'] == label) & (self.data['Well Position'].isin(valid_wells))]['Well Position'].tolist()
-#                        for label in ['WT', 'HET', 'HOM']}
-#         group_wells['Omitted'] = list(self.omitted_wells & valid_wells)
-#         group_wells['Dropped'] = list(self.drop_wells & valid_wells)
-#         return group_wells
-#
-#     def produce_geno_file(self, output_file):
-#         """Generates genotype text file from the data."""
-#         well_to_numeric = {f"{row}{col}": idx for idx, (row, col) in enumerate([(r, c) for r in 'ABCDEFGH' for c in range(1, 13)], start=1)}
-#         self.data['Numeric Well'] = self.data['Well Position'].map(well_to_numeric)
-#         grouped_wells = {genotype: self.data[self.data['Cluster Label'] == genotype]['Numeric Well'].tolist() for genotype in ['WT', 'HET', 'HOM']}
-#         max_length = max(len(values) for values in grouped_wells.values())
-#         df = pd.DataFrame({key: values + [None] * (max_length - len(values)) for key, values in grouped_wells.items()}).fillna("")
-#         df = df.applymap(lambda x: int(x) if isinstance(x, (int, float)) else x)
-#         header_row = pd.DataFrame([df.columns], columns=df.columns)
-#         df = pd.concat([header_row, df], ignore_index=True)
-#         output_path = Path(output_file).with_suffix(".txt")
-#         df.to_csv(output_path, index=False, sep='\t')
-#         print(f"Genotype file saved to {output_path}")
-
-
 class KASP():
 
-    def __init__(self, csv_file, omitted_wells=None, drop_wells=None):
-        self.csv_file = csv_file
-        self.omitted_wells = set(omitted_wells or [])
-        self.drop_wells = set(drop_wells or [])
+    # USAGE
+    # box1 = 16
+    # box2 = 17
+    # csv_files = {
+    #     box1:'KASP/250217_0214_16_PLPBP_7dpf_01_Genotyping Result_20250217_195245.csv',
+    #     box2:'KASP/250217_0214_17_PLPBP_7dpf_Genotyping Result_20250217_195341.csv'
+    # }
+    # # For plate 1 and plate 2 respectively.
+    # omitted_wells = {box1: ['H9','H12','G3'],
+    #                  box2: ['G12','F12']}
+    # drop = {box1: [], box2: []}
+    # display_list = False
+    #
+    # results = b6.KASP(csv_files, omitted_wells, drop, display_list)
 
-        self.data = self.load_data()
-        self.plot_allele_and_well_plate()
+    def __init__(self, csv_files, omitted_wells=None, drop_wells=None, display_list=False):
+        self.csv_files     = csv_files
+        self.omitted_wells = {box: set(wells) for box, wells in (omitted_wells or {}).items()}
+        self.drop_wells    = {box: set(wells) for box, wells in (drop_wells or {}).items()}
+        self.display_list  = display_list
 
-    def load_data(self):
+        # Dictionary to store processed data for each plate
+        self.plates = {}
+
+        # Load and process each file
+        for box_id, file_path in self.csv_files.items():
+            self.plates[box_id] = self.load_data(box_id)
+            self.plot_allele_and_well_plate(box_id)
+            if display_list:
+                self.print_grouped_well_lists(box_id, self.plates[box_id])
+
+
+    def load_data(self, box_id):
         """Loads and preprocesses the data from the CSV file."""
-        data = pd.read_csv(self.csv_file, skiprows=23,
-                           usecols=["Well", "Well Position", "Sample", "Task", "Confidence", "Allele 1", "Allele 2", "Call"])
-        return data[~data['Well Position'].isin(self.drop_wells)]
+        data = pd.read_csv(self.csv_files[box_id], skiprows=23,
+                           usecols=["Well", "Well Position", "Sample", "Allele 1", "Allele 2", "Call"])
+        return data[~data['Well Position'].isin(self.drop_wells[box_id])]
 
-    def perform_clustering(self):
+    def perform_clustering(self, data, box_id):
         """Clusters the data into WT, HET, and HOM using K-means."""
         # Define omitted wells before clustering
-        valid_wells = ~self.data['Well Position'].isin(self.omitted_wells)
+        valid_wells = ~data['Well Position'].isin(self.omitted_wells[box_id])
+
+        print("Omitted: ",self.omitted_wells[box_id])
 
         # Extract only valid data for clustering
-        X = self.data.loc[valid_wells, ['Allele 1', 'Allele 2']]
+        X = data.loc[valid_wells, ['Allele 1', 'Allele 2']]
 
-        # X        = self.data[['Allele 1', 'Allele 2']]
         X_scaled = StandardScaler().fit_transform(X)
         kmeans   = KMeans(n_clusters=3, n_init=10, random_state=42)
         initial_clusters = kmeans.fit_predict(X_scaled)  # Store initial cluster assignments
 
         # Store results only for valid wells
-        self.data.loc[valid_wells, 'Cluster'] = initial_clusters
+        data.loc[valid_wells, 'Cluster'] = initial_clusters
 
         # Compute the centroid distances to determine labels
         centroids = kmeans.cluster_centers_
@@ -947,56 +870,38 @@ class KASP():
         distances = cdist(centroids, [ref_point])
         sorted_clusters = np.argsort(distances[:, 0])
 
-
-        # print(distances[:, 0], sorted_clusters)
-        # print('Ref: ',ref_point)
-
-
         # Dynamically assign genotype labels
         cluster_labels = {sorted_clusters[0]: 'WT', sorted_clusters[1]: 'HET', sorted_clusters[2]: 'HOM'}
 
-        # Debugging print
-        # print("Sorted Clusters:", sorted_clusters)
-
-
-        # Assign correct cluster labels only for valid wells
-        self.data.loc[valid_wells, 'Cluster Label'] = self.data.loc[valid_wells, 'Cluster'].map(cluster_labels)
+        # Assign correct Genotypes only for valid wells
+        data.loc[valid_wells, 'Genotype'] = data.loc[valid_wells, 'Cluster'].map(cluster_labels)
 
         # Ensure omitted wells have NaN for cluster & labels
-        self.data.loc[~valid_wells, ['Cluster', 'Cluster Label']] = np.nan
+        data.loc[~valid_wells, ['Cluster', 'Genotype']] = np.nan
 
-        # print(self.data[['Well Position','Call','Cluster','Cluster Label']])
-
-        # self.data['Cluster Label'] = self.data['Cluster'].map(cluster_order)
-
-        # Remove cluster and genotype assignments for omitted or dropped wells
-        # self.data.loc[self.data['Well Position'].isin(self.omitted_wells | self.drop_wells), ['Cluster', 'Cluster Label']] = np.nan
-
-        # print(self.data[['Well Position','Call','Cluster','Cluster Label']])
-
-
-    def plot_allele_and_well_plate(self):
-
+    def plot_allele_and_well_plate(self, box_id):
+        data = self.plates[box_id]
 
         """Generates allele discrimination and 96-well plate plots."""
-        self.perform_clustering()
-        file_name = Path(self.csv_file).stem
+        self.perform_clustering(data, box_id)
+        file_name = Path(self.csv_files[box_id]).stem
+        print(file_name)
         updated_colors = {'WT': '#ff7f0e', 'HET': '#2ca02c', 'HOM': '#1f77b4'}
-        self.data['Color'] = self.data['Cluster Label'].map(updated_colors)
+        data['Color'] = data['Genotype'].map(updated_colors)
 
-        # print(self.data[['Well Position','Call','Cluster','Cluster Label','Color']])
+        # print(self.data[['Well Position','Call','Cluster','Genotype','Color']])
 
         # Set up the figure with two subplots (for Allele plot and 96-well visualization)
         fig, axs = plt.subplots(1, 2, figsize=(20, 6))
 
         # Allele Discrimination Plot
         ax1 = axs[0]
-        for index, row in self.data.iterrows():
+        for index, row in data.iterrows():
             well_pos = row['Well Position']
-            color = 'black' if well_pos in self.omitted_wells else updated_colors[row['Cluster Label']]
+            color = 'black' if well_pos in self.omitted_wells[box_id] else updated_colors[row['Genotype']]
             ax1.scatter(row['Allele 1'], row['Allele 2'], color=color)
-        for i, txt in enumerate(self.data['Well Position']):
-            ax1.annotate(txt, (self.data['Allele 1'].iloc[i], self.data['Allele 2'].iloc[i]), fontsize=8)
+        for i, txt in enumerate(data['Well Position']):
+            ax1.annotate(txt, (data['Allele 1'].iloc[i], data['Allele 2'].iloc[i]), fontsize=8)
         ax1.set(title=f'{file_name}: Allele Discrimination Plot', xlabel='Allele 1', ylabel='Allele 2')
         ax1.grid(True)
 
@@ -1007,9 +912,9 @@ class KASP():
             for col_label in columns:
                 well_pos = f"{row_label}{col_label}"
                 color = 'white'  # Default for empty wells
-                if well_pos in self.data['Well Position'].values:
-                    row = self.data[self.data['Well Position'] == well_pos].iloc[0]
-                    color = 'black' if well_pos in self.omitted_wells else updated_colors[row['Cluster Label']]
+                if well_pos in data['Well Position'].values:
+                    row = data[data['Well Position'] == well_pos].iloc[0]
+                    color = 'black' if well_pos in self.omitted_wells[box_id] else updated_colors[row['Genotype']]
                 ax2.add_patch(mpatches.Rectangle((col_label - 1, rows.index(row_label)), 1, 1, facecolor=color, edgecolor='black'))
         ax2.set(xlim=(0, 12), ylim=(0, 8), xticks=np.arange(12) + 0.5, yticks=np.arange(8) + 0.5,
                 xticklabels=columns, yticklabels=rows, title=f'{file_name}: 96-Well Plate Calls')
@@ -1017,7 +922,7 @@ class KASP():
 
         # Legend
         legend_patches = [mpatches.Patch(color=updated_colors[label], label=label) for label in ['HOM', 'HET', 'WT']]
-        if self.omitted_wells:
+        if self.omitted_wells[box_id]:
             legend_patches.append(mpatches.Patch(color='black', label='Omitted'))
         legend_patches.append(mpatches.Patch(color='white', label='Empty'))
         ax2.legend(handles=legend_patches, loc='upper right')
@@ -1025,23 +930,23 @@ class KASP():
         plt.tight_layout()
         plt.show()
 
-    def get_grouped_well_lists(self):
+    def get_grouped_well_lists(self, box_id, data):
         """
         Groups wells into WT, HET, HOM, Omitted, and Dropped categories using the object's attributes.
         Returns the lists as formatted dictionaries.
         """
-        all_wells = set(self.data['Well Position'])  # All wells in the dataset
-        omitted_set = set(self.omitted_wells) if self.omitted_wells else set()
-        dropped_set = set(self.drop_wells) if self.drop_wells else set()
+        all_wells = set(data['Well Position'])  # All wells in the dataset
+        omitted_set = set(self.omitted_wells[box_id]) if self.omitted_wells[box_id] else set()
+        dropped_set = set(self.drop_wells[box_id]) if self.drop_wells[box_id] else set()
 
         # Exclude omitted and dropped wells from WT, HET, HOM
         valid_wells = all_wells - omitted_set - dropped_set
         group_wells = {
-            'WT': self.data[(self.data['Cluster Label'] == 'WT') & (self.data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
-            'HET': self.data[(self.data['Cluster Label'] == 'HET') & (self.data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
-            'HOM': self.data[(self.data['Cluster Label'] == 'HOM') & (self.data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
+            'WT': data[(data['Genotype'] == 'WT') & (data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
+            'HET': data[(data['Genotype'] == 'HET') & (data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
+            'HOM': data[(data['Genotype'] == 'HOM') & (data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
             'Omitted': list(omitted_set & all_wells),
-            'Dropped': list(dropped_set & all_wells),
+            'Dropped': list(dropped_set),
         }
 
         # Format and sort the output for each group
@@ -1062,21 +967,31 @@ class KASP():
 
         return group_wells
 
-    def print_grouped_well_lists(self):
+    def print_grouped_well_lists(self, box_id, data):
         """
         Prints grouped and formatted well lists for WT, HET, HOM, Omitted, and Dropped categories.
         """
-        grouped_wells = self.get_grouped_well_lists()
 
+        grouped_wells = self.get_grouped_well_lists(box_id, data)
+        print('Genotypes for plate:',box_id)
         for group, wells in grouped_wells.items():
             print(f"{group}:")
             for row, cols in sorted(wells.items()):  # Sort rows alphabetically
                 print(f"  {row}: {', '.join(map(str, cols))}")
 
+        # Load and process each file
+        # for box_id, data in self.plates.items():
+        #     grouped_wells = self.get_grouped_well_lists(box_id, data)
+        #     print('Genotypes for plate:',box_id)
+        #     for group, wells in grouped_wells.items():
+        #         print(f"{group}:")
+        #         for row, cols in sorted(wells.items()):  # Sort rows alphabetically
+        #             print(f"  {row}: {', '.join(map(str, cols))}")
+
 
     def produce_geno_file(self, output_file):
         """
-        Generate genotype text files from the interpreted data.
+        FOR MATLAB Sleep Analysis.Generate genotype text files from the interpreted data.
 
         Args:
             output_file (str): Path to save the generated genotype file.
@@ -1095,7 +1010,7 @@ class KASP():
 
         # Group numeric wells by genotype
         grouped_wells = {
-            genotype: self.data[self.data['Cluster Label'] == genotype]['Numeric Well'].tolist()
+            genotype: self.data[self.data['Genotype'] == genotype]['Numeric Well'].tolist()
             for genotype in ['WT', 'HET', 'HOM']
         }
 
