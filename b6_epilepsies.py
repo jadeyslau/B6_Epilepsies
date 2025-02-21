@@ -3,6 +3,8 @@ import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+import glob
+import sys
 
 # Third-party imports
 import matplotlib.pyplot as plt
@@ -17,7 +19,6 @@ from scipy.spatial.distance import cdist
 from concurrent.futures import ThreadPoolExecutor
 import dask.dataframe as dd
 from dask.distributed import Client
-
 
 class Experiment:
     def __init__(self, date, box1, box2, exp, export=False, nbox=2, cbox=None, omit=None):
@@ -83,8 +84,6 @@ class Experiment:
             df_list.append(geno_df)
 
         genotype_df = pd.concat(df_list, ignore_index=True)
-
-        # print(genotype_df)
 
         return genotype_df
 
@@ -198,7 +197,7 @@ class RawData(Experiment):
             self.combine_csv_files_dask()
             print("The file does not exist. CSV files have been combined. Exiting program.")
             sys.exit()
-            
+
         print(f"Preparing {mega_df_file}.")
         dirty_data = pd.read_csv(mega_df_file, usecols=cols)
 
@@ -219,10 +218,12 @@ class RawData(Experiment):
         columns_order = ["fullts", "zhrs", "exsecs"] + [col for col in filtered_df.columns if col not in ["fullts", "zhrs", "exsecs"]]
         filtered_df = filtered_df[columns_order]
 
-        # Drop old columns (optional)
-        # filtered_df.drop(columns=["abstime", "time", "type"], inplace=True)
+        # Load genotype data
+        genotype_file = next(iter(glob.glob(os.path.join(self.path, "*_genotypes.csv"))), None)
+        genotype_df = pd.read_csv(genotype_file) if genotype_file else self.get_genotype_df()
+        print(f"Using genotype file: {genotype_file}" if genotype_file else "No genotype file found. Generating from Excel file.")
 
-        genotype_df = self.get_genotype_df()
+        # genotype_df = self.get_genotype_df()
         # condition_df = self.get_condition_df()
         # print(geno_df, cond_df)
 
@@ -334,13 +335,70 @@ class RawData(Experiment):
     #         self.mega_dataframe.to_csv(output_file, index=False)
     #     return self.mega_dataframe
 
+#     def combine_csv_files_dask(self, output_file=None):
+#         # Define input and output paths
+#         csv_folder = f"{self.path}{self.name}_rawoutput/raw_converted_csv/"
+#         output_file = output_file or f"{self.path}{self.name}_raw_df.csv"
+#
+#         #**Limit resources: ≤6 cores, ≤30GB memory**
+#         # client = Client(n_workers=6, threads_per_worker=1, memory_limit='5GB')  # 6 workers x 5GB each = 30GB
+#
+#         # Define consistent dtypes to avoid type conflicts
+#         dtype = {
+#             'abstime': 'object',  # Will be parsed later as datetime
+#             'time': 'object',
+#             'channel': 'float64',
+#             'type': 'float64',
+#             'location': 'object',
+#             'data1': 'float64'
+#         }
+#
+#         # Use a pattern to load all CSV files
+#         csv_files_pattern = os.path.join(csv_folder, "*.csv")
+#
+#         # **Limit memory per partition using `blocksize="100MB"`**
+#         ddf = dd.read_csv(
+#             csv_files_pattern,
+#             usecols=['abstime', 'time', 'channel', 'type', 'location', 'data1'],
+#             dtype=dtype,
+#             blocksize="100MB"  # Prevent loading too much into memory
+#         )
+#
+#         # Convert 'abstime' column safely (Handle both numeric & datetime formats)
+#         ddf['abstime'] = dd.to_datetime(
+#             dd.to_numeric(ddf['abstime'], errors='coerce'),
+#             unit='ms', errors='coerce'
+#         ).fillna(
+#             dd.to_datetime(ddf['abstime'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+#         )
+#
+#         # Drop rows with invalid abstime
+#         ddf = ddf[ddf['abstime'].notnull()]
+#
+#         # **Do not compute everything into memory**
+#         # Instead of `compute()`, write to CSV using Dask
+#         if output_file:
+#             ddf.to_csv(output_file, index=False, single_file=True)  # Save efficiently
+#
+#         # **Shut down Dask client to free resources**
+#         # client.close()
+# #
+#         # return ddf
+
     def combine_csv_files_dask(self, output_file=None):
         # Define input and output paths
         csv_folder = f"{self.path}{self.name}_rawoutput/raw_converted_csv/"
         output_file = output_file or f"{self.path}{self.name}_raw_df.csv"
 
-        #**Limit resources: ≤6 cores, ≤30GB memory**
-        # client = Client(n_workers=6, threads_per_worker=1, memory_limit='5GB')  # 6 workers x 5GB each = 30GB
+        # Get the list of CSV files
+        csv_files = [f for f in os.listdir(csv_folder) if f.endswith('.csv')]
+        total_files = len(csv_files)
+
+        if total_files == 0:
+            print("No CSV files found to process.")
+            return None
+
+        print(f"Found {total_files} CSV files. Starting the combination process...")
 
         # Define consistent dtypes to avoid type conflicts
         dtype = {
@@ -374,66 +432,14 @@ class RawData(Experiment):
         # Drop rows with invalid abstime
         ddf = ddf[ddf['abstime'].notnull()]
 
-        # **Do not compute everything into memory**
-        # Instead of `compute()`, write to CSV using Dask
+        # Save output
         if output_file:
+            print(f"Writing combined data to {output_file}...")
             ddf.to_csv(output_file, index=False, single_file=True)  # Save efficiently
 
-        # **Shut down Dask client to free resources**
-        # client.close()
+        print(f"Combination completed. Data saved to {output_file}.")
 
         return ddf
-
-    # def combine_csv_files(self, output_file=None):
-    # # def combine_csv_files(self, input_folder, output_file=None):
-    #     """
-    #     Combines all CSV files in a folder into a single DataFrame.
-    #     You first need to use the bash script (found in Scripts) in Terminal to batch convert xls to csv with SSCONVERT.
-    #     e.g. ./batch_convert_xls_to_csv.sh 241107_16_17_PNPO_PTZ/241107_16_17_PNPO_PTZ_rawoutput
-    #     This method will not work if there is an existing combined csv inside the input folder (csv_folder).
-    #
-    #     Args:
-    #         input_folder (str): Path to the folder containing CSV files.
-    #         output_file (str, optional): Path to save the combined DataFrame as a CSV.
-    #
-    #     Returns:
-    #         pandas.DataFrame: Combined DataFrame of all CSV files.
-    #     """
-    #     csv_folder  = f"{self.path}{self.name}_rawoutput/raw_converted_csv/"
-    #     output_file = f"{self.path}{self.name}_raw_df.csv"
-    #
-    #     # List and sort all CSV files in the input folder by numeric order
-    #     csv_files = sorted(
-    #         [f for f in os.listdir(csv_folder) if f.endswith('.csv')],
-    #         key=lambda x: int(re.search(r'_(\d+)\.csv$', x).group(1))  # Match digits at the end
-    #     )
-    #
-    #     if not csv_files:
-    #         print(f"No CSV files found in {csv_folder}.")
-    #         return None
-    #
-    #     cols = ['abstime', 'time', 'channel', 'type', 'location', 'data1']
-    #
-    #     # Initialize an empty list to store DataFrames
-    #     dataframes = []
-    #
-    #     # Iterate through each CSV file
-    #     for csv_file in csv_files:
-    #         file_path = os.path.join(csv_folder, csv_file)
-    #         print(f"Reading {file_path}")
-    #         df = pd.read_csv(file_path, usecols=cols, parse_dates=['abstime'])  # Adjust for delimiter if necessary
-    #         dataframes.append(df)
-    #
-    #     # Combine all DataFrames into one
-    #     self.mega_dataframe = pd.concat(dataframes, ignore_index=True)
-    #     print("All files have been combined into a single DataFrame.")
-    #
-    #     # Save the combined DataFrame as a CSV if specified
-    #     if output_file:
-    #         self.mega_dataframe.to_csv(output_file, index=False)
-    #         print(f"Combined DataFrame saved to {output_file}")
-    #
-    #     return self.mega_dataframe
 
 
 class MiddurData(Experiment): #The output is not compatible with sleep analysis
@@ -991,19 +997,8 @@ class KASP():
         #         for row, cols in sorted(wells.items()):  # Sort rows alphabetically
         #             print(f"  {row}: {', '.join(map(str, cols))}")
 
-    # def save_geno_file(self):
-    #     merged_data = pd.DataFrame()
-    #
-    #     for box_id, data in self.plates.items():
-    #         # print(box_id, data[['Well Position','Genotype']])
-    #         temp        = data[['Well Position','Genotype']]
-    #         temp['box'] = box_id
-    #         merged_data.concat(temp)
-    #
-    #     merged_data.columns = ['well', 'genotype', 'box']
-    #     return None
 
-    def save_geno_file(self):
+    def save_geno_file(self, output_file):
         merged_data = []  # Use a list to store individual DataFrames
 
         for box_id, data in self.plates.items():
@@ -1013,11 +1008,23 @@ class KASP():
 
         merged_data = pd.concat(merged_data, ignore_index=True)  # Combine all into a single DataFrame
         merged_data.columns = ['well', 'genotype', 'box']
-        print(merged_data)  # Check the output
-        # TODO Change the omitted, dropped to excluded and also empty rather than nan
-        return merged_data  # Return DataFrame instead of None
 
-    def produce_geno_file_SA(self, output_file):
+        # Replace NaN values in genotype with "Excluded"
+        # Use assignment instead of inplace modification to avoid FutureWarning
+        merged_data['genotype'] = merged_data['genotype'].fillna('Excluded')
+
+
+        # Ensure output directory exists
+        os.makedirs(output_file, exist_ok=True)
+
+        # Save as a proper CSV
+        merged_data.to_csv(f"{output_file}/{output_file}_genotypes.csv", index=False)
+        print(f"Genotype file saved as {output_file}/{output_file}_genotypes.csv")
+
+        return merged_data
+
+
+    def save_geno_file_SA(self, output_file):
         """
         FOR MATLAB Sleep Analysis.Generate genotype text files from the interpreted data.
 
