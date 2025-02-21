@@ -84,7 +84,7 @@ class Experiment:
 
         genotype_df = pd.concat(df_list, ignore_index=True)
 
-        print(genotype_df)
+        # print(genotype_df)
 
         return genotype_df
 
@@ -193,10 +193,12 @@ class RawData(Experiment):
         mega_df_file = f"{self.path}{self.name}_raw_df.csv"
         cols         = ["abstime", "time", "type", "location", "data1"]
 
+
         if not os.path.exists(mega_df_file):
             self.combine_csv_files_dask()
-            raise FileNotFoundError("The file does not exist. You need to combine the csv files first. obj.combine_csv_files()")
-
+            print("The file does not exist. CSV files have been combined. Exiting program.")
+            sys.exit()
+            
         print(f"Preparing {mega_df_file}.")
         dirty_data = pd.read_csv(mega_df_file, usecols=cols)
 
@@ -338,7 +340,7 @@ class RawData(Experiment):
         output_file = output_file or f"{self.path}{self.name}_raw_df.csv"
 
         #**Limit resources: ≤6 cores, ≤30GB memory**
-        client = Client(n_workers=6, threads_per_worker=1, memory_limit='5GB')  # 6 workers x 5GB each = 30GB
+        # client = Client(n_workers=6, threads_per_worker=1, memory_limit='5GB')  # 6 workers x 5GB each = 30GB
 
         # Define consistent dtypes to avoid type conflicts
         dtype = {
@@ -378,7 +380,7 @@ class RawData(Experiment):
             ddf.to_csv(output_file, index=False, single_file=True)  # Save efficiently
 
         # **Shut down Dask client to free resources**
-        client.close()
+        # client.close()
 
         return ddf
 
