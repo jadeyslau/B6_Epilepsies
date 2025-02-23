@@ -224,9 +224,7 @@ class RawData(Experiment):
         genotype_df = pd.read_csv(genotype_file) if genotype_file else self.get_genotype_df()
         print(f"Using genotype file: {genotype_file}" if genotype_file else "No genotype file found. Generating from Excel file.")
 
-        # genotype_df = self.get_genotype_df()
-        # condition_df = self.get_condition_df()
-        # print(geno_df, cond_df)
+        genotype_df.box = genotype_df.box.astype(str)
 
         filtered_df = self.convert_location_column(filtered_df)
 
@@ -977,7 +975,6 @@ class KASP():
         # Replace NaN values in genotype with "Excluded"
         # Use assignment instead of inplace modification to avoid FutureWarning
         merged_data['genotype'] = merged_data['genotype'].fillna('Excluded')
-
 
         # Ensure output directory exists
         os.makedirs(output_file, exist_ok=True)
