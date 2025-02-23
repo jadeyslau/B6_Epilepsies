@@ -194,7 +194,8 @@ class RawData(Experiment):
 
 
         if not os.path.exists(mega_df_file):
-            self.combine_csv_files_dask()
+            # self.combine_csv_files_dask()
+            self.combine_csv_files()
             print("The file does not exist. CSV files have been combined. Exiting program.")
             sys.exit()
 
@@ -293,97 +294,61 @@ class RawData(Experiment):
     #     return pd.Series([full_timestamp, zhrs, time_in_seconds])
 
 
-    # def combine_csv_files_dask(self, output_file=None):
-    #     # Define input and output paths
-    #     csv_folder = f"{self.path}{self.name}_rawoutput/raw_converted_csv/"
-    #     output_file = output_file or f"{self.path}{self.name}_raw_df.csv"
-    #
-    #     # Define consistent dtypes for all columns
-    #     dtype = {
-    #         'abstime': 'object',  # Will be parsed later as datetime
-    #         'time': 'object',     # Assuming it's a string
-    #         'channel': 'float64', # Ensuring consistent float type
-    #         'type': 'float64',    # Ensuring consistent float type
-    #         'location': 'object', # Assuming it's a string
-    #         'data1': 'float64'    # Assuming numeric
-    #     }
-    #
-    #     # Use a pattern to load all CSV files
-    #     csv_files_pattern = os.path.join(csv_folder, "*.csv")
-    #
-    #     # Load all CSV files into a Dask DataFrame
-    #     ddf = dd.read_csv(
-    #         csv_files_pattern,
-    #         usecols=['abstime', 'time', 'channel', 'type', 'location', 'data1'],
-    #         dtype=dtype
-    #     )
-    #
-    #     # Safely handle abstime: prioritize numeric parsing for 'unit'
-    #     ddf['abstime'] = dd.to_datetime(
-    #         dd.to_numeric(ddf['abstime'], errors='coerce'),
-    #         unit='ms', errors='coerce'
-    #     ).fillna(
-    #         dd.to_datetime(ddf['abstime'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
-    #     )
-    #
-    #     # Drop rows with invalid abstime
-    #     ddf = ddf[ddf['abstime'].notnull()]
-    #
-    #     # Compute and optionally save to CSV
-    #     self.mega_dataframe = ddf.compute()
-    #     if output_file:
-    #         self.mega_dataframe.to_csv(output_file, index=False)
-    #     return self.mega_dataframe
 
-#     def combine_csv_files_dask(self, output_file=None):
-#         # Define input and output paths
-#         csv_folder = f"{self.path}{self.name}_rawoutput/raw_converted_csv/"
-#         output_file = output_file or f"{self.path}{self.name}_raw_df.csv"
-#
-#         #**Limit resources: ≤6 cores, ≤30GB memory**
-#         # client = Client(n_workers=6, threads_per_worker=1, memory_limit='5GB')  # 6 workers x 5GB each = 30GB
-#
-#         # Define consistent dtypes to avoid type conflicts
-#         dtype = {
-#             'abstime': 'object',  # Will be parsed later as datetime
-#             'time': 'object',
-#             'channel': 'float64',
-#             'type': 'float64',
-#             'location': 'object',
-#             'data1': 'float64'
-#         }
-#
-#         # Use a pattern to load all CSV files
-#         csv_files_pattern = os.path.join(csv_folder, "*.csv")
-#
-#         # **Limit memory per partition using `blocksize="100MB"`**
-#         ddf = dd.read_csv(
-#             csv_files_pattern,
-#             usecols=['abstime', 'time', 'channel', 'type', 'location', 'data1'],
-#             dtype=dtype,
-#             blocksize="100MB"  # Prevent loading too much into memory
-#         )
-#
-#         # Convert 'abstime' column safely (Handle both numeric & datetime formats)
-#         ddf['abstime'] = dd.to_datetime(
-#             dd.to_numeric(ddf['abstime'], errors='coerce'),
-#             unit='ms', errors='coerce'
-#         ).fillna(
-#             dd.to_datetime(ddf['abstime'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
-#         )
-#
-#         # Drop rows with invalid abstime
-#         ddf = ddf[ddf['abstime'].notnull()]
-#
-#         # **Do not compute everything into memory**
-#         # Instead of `compute()`, write to CSV using Dask
-#         if output_file:
-#             ddf.to_csv(output_file, index=False, single_file=True)  # Save efficiently
-#
-#         # **Shut down Dask client to free resources**
-#         # client.close()
-# #
-#         # return ddf
+
+
+    def combine_csv_files(self, output_file=None):
+    # def combine_csv_files(self, input_folder, output_file=None):
+        """
+        Combines all CSV files in a folder into a single DataFrame.
+        You first need to use the bash script (found in Scripts) in Terminal to batch convert xls to csv with SSCONVERT.
+        e.g. ./batch_convert_xls_to_csv.sh 241107_16_17_PNPO_PTZ/241107_16_17_PNPO_PTZ_rawoutput
+        This method will not work if there is an existing combined csv inside the input folder (csv_folder).
+
+        Args:
+            input_folder (str): Path to the folder containing CSV files.
+            output_file (str, optional): Path to save the combined DataFrame as a CSV.
+
+        Returns:
+            pandas.DataFrame: Combined DataFrame of all CSV files.
+        """
+        csv_folder  = f"{self.path}{self.name}_rawoutput/raw_converted_csv/"
+        output_file = f"{self.path}{self.name}_raw_df.csv"
+
+        # List and sort all CSV files in the input folder by numeric order
+        csv_files = sorted(
+            [f for f in os.listdir(csv_folder) if f.endswith('.csv')],
+            key=lambda x: int(re.search(r'_(\d+)\.csv$', x).group(1))  # Match digits at the end
+        )
+
+        if not csv_files:
+            print(f"No CSV files found in {csv_folder}.")
+            return None
+
+        cols = ['abstime', 'time', 'channel', 'type', 'location', 'data1']
+
+        # Initialize an empty list to store DataFrames
+        dataframes = []
+
+        # Iterate through each CSV file
+        for csv_file in csv_files:
+            file_path = os.path.join(csv_folder, csv_file)
+            print(f"Reading {file_path}")
+            df = pd.read_csv(file_path, usecols=cols, parse_dates=['abstime'])  # Adjust for delimiter if necessary
+            dataframes.append(df)
+
+        # Combine all DataFrames into one
+        self.mega_dataframe = pd.concat(dataframes, ignore_index=True)
+        print("All files have been combined into a single DataFrame.")
+
+        # Save the combined DataFrame as a CSV if specified
+        if output_file:
+            self.mega_dataframe.to_csv(output_file, index=False)
+            print(f"Combined DataFrame saved to {output_file}")
+
+        return self.mega_dataframe
+
+
 
     def combine_csv_files_dask(self, output_file=None):
         # Define input and output paths
