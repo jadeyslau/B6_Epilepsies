@@ -69,21 +69,32 @@ class Experiment:
         # geno = self.find_map_files(self.path)
         # self.geno_map_files = self.find_map_files(self.path)['Genotype Map Files'][0]
         # self.cond_map_files = self.find_map_files(self.path)['Condition Map Files'][0]
+        # Load genotype data
+        genotype_file = next(iter(glob.glob(os.path.join(self.path, "*_genotypes.csv"))), None)
+        # genotype_df = pd.read_csv(genotype_file) if genotype_file else self.get_genotype_df()
+        # print(f"Using genotype file: {genotype_file}" if genotype_file else "No genotype file found. Generating from Excel file.")
 
-        df_list = []
+        if genotype_file:
+            genotype_df = pd.read_csv(genotype_file)
+            print(f"Using genotype file: {genotype_file}" if genotype_file else "No genotype file found. Generating from Excel file.")
+        else:
 
-        for i, geno_file in enumerate(self.geno_map_files):
+            df_list = []
 
-            current_box = re.search(r'_(\d+)_genotypeMap', geno_file).group(1)
+            for i, geno_file in enumerate(self.geno_map_files):
+
+                current_box = re.search(r'_(\d+)_genotypeMap', geno_file).group(1)
 
 
-            # Tidy genotype and condMap data, adding box identifiers
-            genotype_data = pd.read_excel(self.path+geno_file) # If the Excel file is open, this might throw an engine error
-            geno_df = self.strip_96well_data(genotype_data, current_box, 'genotype')
+                # Tidy genotype and condMap data, adding box identifiers
+                genotype_data = pd.read_excel(self.path+geno_file) # If the Excel file is open, this might throw an engine error
+                geno_df = self.strip_96well_data(genotype_data, current_box, 'genotype')
 
-            df_list.append(geno_df)
+                df_list.append(geno_df)
 
-        genotype_df = pd.concat(df_list, ignore_index=True)
+            genotype_df = pd.concat(df_list, ignore_index=True)
+
+        genotype_df.box = genotype_df.box.astype(str)
 
         return genotype_df
 
@@ -188,21 +199,25 @@ class RawData(Experiment):
         else:
             return None
 
-    def prepare_raw_data(self):
-        mega_df_file = f"{self.path}{self.name}_raw_df.csv"
+    def prepare_raw_data(self, input_file=None):
+        mega_df_file         = f"{self.path}{self.name}_raw_df.csv"
+        # mega_df_file_parquet = f"{self.path}{self.name}_raw_df.parquet"
+
         cols         = ["abstime", "time", "type", "location", "data1"]
 
+        if input_file:
+            mega_df_file = input_file
+        else:
+            if not os.path.exists(mega_df_file):
+                # self.combine_csv_files_dask()
+                # self.combine_csv_files()
+                print("The file does not exist. CSV files need to be combined. Exiting program.")
+                sys.exit()
 
-        if not os.path.exists(mega_df_file):
-            # self.combine_csv_files_dask()
-            self.combine_csv_files()
-            print("The file does not exist. CSV files have been combined. Exiting program.")
-            sys.exit()
+            print(f"Preparing {mega_df_file}, from file.")
+            dirty_data = pd.read_csv(mega_df_file, usecols=cols)
 
-        print(f"Preparing {mega_df_file}.")
-        dirty_data = pd.read_csv(mega_df_file, usecols=cols)
-
-
+        # dirty_data = pd.read_parquet(mega_df_file_parquet, columns=cols)
 
         # Filter rows and create a copy
         filtered_df = dirty_data[dirty_data['type'] == 101].copy()
@@ -219,12 +234,14 @@ class RawData(Experiment):
         columns_order = ["fullts", "zhrs", "exsecs"] + [col for col in filtered_df.columns if col not in ["fullts", "zhrs", "exsecs"]]
         filtered_df = filtered_df[columns_order]
 
-        # Load genotype data
-        genotype_file = next(iter(glob.glob(os.path.join(self.path, "*_genotypes.csv"))), None)
-        genotype_df = pd.read_csv(genotype_file) if genotype_file else self.get_genotype_df()
-        print(f"Using genotype file: {genotype_file}" if genotype_file else "No genotype file found. Generating from Excel file.")
+        # # Load genotype data
+        # genotype_file = next(iter(glob.glob(os.path.join(self.path, "*_genotypes.csv"))), None)
+        # genotype_df = pd.read_csv(genotype_file) if genotype_file else self.get_genotype_df()
+        # print(f"Using genotype file: {genotype_file}" if genotype_file else "No genotype file found. Generating from Excel file.")
+        #
+        # genotype_df.box = genotype_df.box.astype(str)
 
-        genotype_df.box = genotype_df.box.astype(str)
+        genotype_df = self.get_genotype_df()
 
         filtered_df = self.convert_location_column(filtered_df)
 
@@ -293,6 +310,49 @@ class RawData(Experiment):
 
 
 
+    def combine_csv_MPI(self, csv_files):
+    # def combine_csv_files(self, input_folder, output_file=None):
+        """
+        Combines all CSV files in a folder into a single DataFrame.
+        You first need to use the bash script (found in Scripts) in Terminal to batch convert xls to csv with SSCONVERT.
+        e.g. ./batch_convert_xls_to_csv.sh 241107_16_17_PNPO_PTZ/241107_16_17_PNPO_PTZ_rawoutput
+        This method will not work if there is an existing combined csv inside the input folder (csv_folder).
+
+        Args:
+            input_folder (str): Path to the folder containing CSV files.
+            output_file (str, optional): Path to save the combined DataFrame as a CSV.
+
+        Returns:
+            pandas.DataFrame: Combined DataFrame of all CSV files.
+        """
+        csv_folder  = f"{self.path}{self.name}_rawoutput/raw_converted_csv/"
+        output_file = f"{self.path}{self.name}_raw_df.csv"
+
+        # List and sort all CSV files in the input folder by numeric order
+        csv_files = sorted(csv_files)
+
+        cols = ['abstime', 'time', 'channel', 'type', 'location', 'data1']
+
+        # Initialize an empty list to store DataFrames
+        dataframes = []
+
+        # Iterate through each CSV file
+        for csv_file in csv_files:
+            file_path = os.path.join(csv_folder, csv_file)
+            print(f"Reading {file_path}")
+            df = pd.read_csv(file_path, usecols=cols, parse_dates=['abstime'])  # Adjust for delimiter if necessary
+            dataframes.append(df)
+
+        # Combine all DataFrames into one
+        partial_df = pd.concat(dataframes, ignore_index=True)
+        # print("All files have been combined into a single DataFrame.")
+
+        # Save the combined DataFrame as a CSV if specified
+        # if output_file:
+        #     self.mega_dataframe.to_csv(output_file, index=False)
+        #     print(f"Combined DataFrame saved to {output_file}")
+
+        return partial_df
 
 
     def combine_csv_files(self, output_file=None):
@@ -794,10 +854,11 @@ class KASP():
     #
     # results = b6.KASP(csv_files, omitted_wells, drop, display_list)
 
-    def __init__(self, csv_files, omitted_wells=None, drop_wells=None, display_list=False):
+    def __init__(self, csv_files, omitted_wells=None, drop_wells=None, controls=None, display_list=False):
         self.csv_files     = csv_files
         self.omitted_wells = {box: set(wells) for box, wells in (omitted_wells or {}).items()}
         self.drop_wells    = {box: set(wells) for box, wells in (drop_wells or {}).items()}
+        self.controls      = {box: set(wells) for box, wells in (controls or {}).items()}
         self.display_list  = display_list
 
         # Dictionary to store processed data for each plate
@@ -822,7 +883,7 @@ class KASP():
         # Define omitted wells before clustering
         valid_wells = ~data['Well Position'].isin(self.omitted_wells[box_id])
 
-        print("Omitted: ",self.omitted_wells[box_id])
+        # print("Omitted: ",self.omitted_wells[box_id])
 
         # Extract only valid data for clustering
         X = data.loc[valid_wells, ['Allele 1', 'Allele 2']]
@@ -908,17 +969,20 @@ class KASP():
         Returns the lists as formatted dictionaries.
         """
         all_wells = set(data['Well Position'])  # All wells in the dataset
-        omitted_set = set(self.omitted_wells[box_id]) if self.omitted_wells[box_id] else set()
-        dropped_set = set(self.drop_wells[box_id]) if self.drop_wells[box_id] else set()
+        omitted_set  = set(self.omitted_wells[box_id]) if self.omitted_wells[box_id] else set()
+        dropped_set  = set(self.drop_wells[box_id]) if self.drop_wells[box_id] else set()
+        controls_set = set(self.controls[box_id]) if self.controls[box_id] else set()
+        print(self.controls[box_id], box_id)
 
         # Exclude omitted and dropped wells from WT, HET, HOM
-        valid_wells = all_wells - omitted_set - dropped_set
+        valid_wells = all_wells - omitted_set - dropped_set - controls_set
         group_wells = {
             'WT': data[(data['Genotype'] == 'WT') & (data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
             'HET': data[(data['Genotype'] == 'HET') & (data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
             'HOM': data[(data['Genotype'] == 'HOM') & (data['Well Position'].isin(valid_wells))]['Well Position'].tolist(),
             'Omitted': list(omitted_set & all_wells),
             'Dropped': list(dropped_set),
+            'Controls': list(controls_set)
         }
 
         # Format and sort the output for each group
@@ -976,14 +1040,17 @@ class KASP():
         # Use assignment instead of inplace modification to avoid FutureWarning
         merged_data['genotype'] = merged_data['genotype'].fillna('Excluded')
 
+        # If there are controls, remove them
+        df_filtered = merged_data[~merged_data.apply(lambda row: row["well"] in self.controls.get(row["box"], []), axis=1)]
+
         # Ensure output directory exists
         os.makedirs(output_file, exist_ok=True)
 
         # Save as a proper CSV
-        merged_data.to_csv(f"{output_file}/{output_file}_genotypes.csv", index=False)
+        df_filtered.to_csv(f"{output_file}/{output_file}_genotypes.csv", index=False)
         print(f"Genotype file saved as {output_file}/{output_file}_genotypes.csv")
 
-        return merged_data
+        return df_filtered
 
 
     def save_geno_file_SA(self, output_file):
