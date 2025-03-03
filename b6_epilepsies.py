@@ -8,6 +8,8 @@ import sys
 
 # Third-party imports
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
+from matplotlib.ticker import AutoMinorLocator
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -256,8 +258,8 @@ class RawData(Experiment):
         # # Set WT as default genotype where missing
         # merged_data['genotype'].fillna('WT', inplace=True)
         merged_data['genotype'].dropna(inplace=True)
-
-        merged_data = merged_data[~merged_data['genotype'].isin(['empty', 'NaN'])]
+        # print(merged_data['genotype'].unique())
+        merged_data = merged_data[~merged_data['genotype'].isin(['empty', 'NaN', np.nan])]
 
         print('Done')
         return merged_data
@@ -308,8 +310,6 @@ class RawData(Experiment):
     #     zhrs = (full_timestamp - self.zt0).total_seconds() / 3600
     #     return pd.Series([full_timestamp, zhrs, time_in_seconds])
 
-
-
     def combine_csv_MPI(self, csv_files):
     # def combine_csv_files(self, input_folder, output_file=None):
         """
@@ -353,7 +353,6 @@ class RawData(Experiment):
         #     print(f"Combined DataFrame saved to {output_file}")
 
         return partial_df
-
 
     def combine_csv_files(self, output_file=None):
     # def combine_csv_files(self, input_folder, output_file=None):
@@ -405,8 +404,6 @@ class RawData(Experiment):
             print(f"Combined DataFrame saved to {output_file}")
 
         return self.mega_dataframe
-
-
 
     def combine_csv_files_dask(self, output_file=None):
         # Define input and output paths
@@ -463,6 +460,67 @@ class RawData(Experiment):
         print(f"Combination completed. Data saved to {output_file}.")
 
         return ddf
+
+    def plot_single_fish_activity(self, well, event_windows, title_prefix="", drug_app=None, filterY=None, figsize=(20, 12)):
+        """
+        Plots fish activity from a given dataframe with event highlights.
+
+        Parameters:
+        - df: pandas DataFrame containing the data
+        - well: str, well identifier to filter the data
+        - event_windows: list of tuples, each tuple contains (start_time, end_time, title)
+        - title_prefix: str, prefix for subplot titles
+        - figsize: tuple, figure size
+        """
+        df = self.df
+        # Ensure elapsed_time is calculated
+        reference_time = df['fullts'].min()
+        df['elapsed_time'] = (df['fullts'] - reference_time).dt.total_seconds() / 60
+
+        # Filter data for the selected well
+        if filterY:
+            fish_data = df[(df['well'] == well) & (df['data1'] < filterY)]
+        else:
+            fish_data = df[df['well'] == well]
+
+        genotype  = fish_data['genotype'].unique()[0]
+        suffix    = f"({well}, {genotype})"
+
+        # Define the palette
+        palette = sns.color_palette("hls", n_colors=df['genotype'].nunique())
+
+        # Global font size settings
+        plt.rc('axes', titlesize=18)
+        plt.rc('axes', labelsize=16)
+        plt.rc('xtick', labelsize=14)
+        plt.rc('ytick', labelsize=14)
+
+        # Create figure with subplots
+        fig, axes = plt.subplots(len(event_windows) + 1, 1, figsize=figsize)
+
+        # Plot full data in the first subplot
+        sns.lineplot(ax=axes[0], x='elapsed_time', y='data1', data=fish_data, hue='genotype', palette=palette)
+        for start, end, _ in event_windows:
+            axes[0].axvspan(start, end, color='lightblue', alpha=0.3)
+
+        if drug_app: axes[0].axvspan(drug_app[0], drug_app[1], color='lightgray', alpha=0.3)
+
+        axes[0].set_title(f"{title_prefix} Raw Data {suffix}")
+        axes[0].set_xlabel("Elapsed Time (minutes)")
+        axes[0].set_ylabel("Δ Pixel")
+        axes[0].legend(title="Genotype", loc='best')
+
+        # Plot individual event windows
+        for i, (start, end, title) in enumerate(event_windows):
+            event_data = fish_data[(fish_data['elapsed_time'] > start) & (fish_data['elapsed_time'] < end)]
+            sns.lineplot(ax=axes[i + 1], x='elapsed_time', y='data1', data=event_data, hue='genotype')
+            axes[i + 1].set_title(f"{title_prefix} {title} {suffix}")
+            axes[i + 1].set_xlabel("Elapsed Time (minutes)")
+            axes[i + 1].set_ylabel("Δ Pixel")
+            axes[i + 1].legend(title="Genotype", loc='best')
+
+        plt.tight_layout()
+        plt.show()
 
 
 class MiddurData(Experiment): #The output is not compatible with sleep analysis
@@ -589,6 +647,7 @@ class MiddurData(Experiment): #The output is not compatible with sleep analysis
     # Function to plot data for a single box
     def plot_box_data(self, data, box_id):
         box_data = data[data['box'] == box_id].copy()
+        print(box_data)
 
         if self.omit is not None and box_id in self.omit:
             omit_list = self.omit[box_id]  # Get the list for the corresponding box_id
@@ -683,7 +742,6 @@ class MiddurData(Experiment): #The output is not compatible with sleep analysis
 
 
         return None
-
 
 class MiddurData_SA(Experiment): #The output is compatible with sleep analysis
     # def __init__(self, date, box1, box2, exp, export=False):
