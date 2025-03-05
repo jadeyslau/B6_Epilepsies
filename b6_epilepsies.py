@@ -62,7 +62,7 @@ class Experiment:
         # Read and add box identifiers
         temp_df  = pd.read_csv(self.filename, usecols=cols, low_memory=True, header=0, nrows=2)
         # Combine 'stdate' and 'sttime' into a single datetime column
-        temp_df['stdate_sttime'] = pd.to_datetime(temp_df['stdate'] + ' ' + temp_df['sttime'], dayfirst=True)
+        temp_df['stdate_sttime'] = pd.to_datetime(temp_df['stdate'] + ' ' + temp_df['sttime'], dayfirst=False)
         print(f"Start of experiment: {temp_df['stdate_sttime'][0]}")
 
         return temp_df['stdate_sttime'][0]
@@ -190,19 +190,24 @@ class RawData(Experiment):
         # Call the parent class's __init__
         super().__init__(date, box1, box2, exp, export, omit=omit)
 
-        # if not os.path.exists(f"{self.path}{self.name}_raw_df.csv"):
-        #     self.df = self.prepare_raw_data()
-        self.df = self.prepare_raw_data()
+        processed_path = f"{self.path}{self.name}_processed.csv"
 
-
-
-        if self.omit is None:
-            return None
+        if not os.path.exists(processed_path):
+            self.df = self.prepare_raw_data()
         else:
-            return None
+            print(f'Instantiated using {processed_path}, no need to prepare raw data.')
+            self.df = pd.read_csv(processed_path)
+            print('Done.')
+        # self.df = self.prepare_raw_data()
+
+        # if self.omit is None:
+        #     return None
+        # else:
+        #     return None
 
     def prepare_raw_data(self, input_file=None):
-        mega_df_file         = f"{self.path}{self.name}_raw_df.csv"
+        mega_df_file = f"{self.path}{self.name}_raw_df.csv"
+        output_file  = f"{self.path}{self.name}_processed.csv"
         # mega_df_file_parquet = f"{self.path}{self.name}_raw_df.parquet"
 
         cols         = ["abstime", "time", "type", "location", "data1"]
@@ -216,7 +221,7 @@ class RawData(Experiment):
                 print("The file does not exist. CSV files need to be combined. Exiting program.")
                 sys.exit()
 
-            print(f"Preparing {mega_df_file}, from file.")
+            print(f"Preparing data from {mega_df_file}.")
             dirty_data = pd.read_csv(mega_df_file, usecols=cols)
 
         # dirty_data = pd.read_parquet(mega_df_file_parquet, columns=cols)
@@ -233,20 +238,13 @@ class RawData(Experiment):
 
 
         # Move the new columns to the front
-        columns_order = ["fullts", "zhrs", "exsecs"] + [col for col in filtered_df.columns if col not in ["fullts", "zhrs", "exsecs"]]
-        filtered_df = filtered_df[columns_order]
-
-        # # Load genotype data
-        # genotype_file = next(iter(glob.glob(os.path.join(self.path, "*_genotypes.csv"))), None)
-        # genotype_df = pd.read_csv(genotype_file) if genotype_file else self.get_genotype_df()
-        # print(f"Using genotype file: {genotype_file}" if genotype_file else "No genotype file found. Generating from Excel file.")
-        #
-        # genotype_df.box = genotype_df.box.astype(str)
+        # columns_order = ["fullts", "zhrs", "exsecs"] + [col for col in filtered_df.columns if col not in ["fullts", "zhrs", "exsecs"]]
+        # filtered_df = filtered_df[columns_order]
 
         genotype_df = self.get_genotype_df()
 
+        # Adds columns box. well, and plate
         filtered_df = self.convert_location_column(filtered_df)
-
 
         if self.cond_map_files:
             condition_df = self.get_condition_df()
@@ -255,14 +253,25 @@ class RawData(Experiment):
         else:
             merged_data = filtered_df.merge(genotype_df, on=['box', 'well'], how='left')
 
-        # # Set WT as default genotype where missing
-        # merged_data['genotype'].fillna('WT', inplace=True)
+
         merged_data['genotype'].dropna(inplace=True)
-        # print(merged_data['genotype'].unique())
         merged_data = merged_data[~merged_data['genotype'].isin(['empty', 'NaN', np.nan])]
 
+        # Ensure elapsed_time is calculated
+        reference_time = merged_data['fullts'].min()
+        merged_data['elapsed_time'] = (merged_data['fullts'] - reference_time).dt.total_seconds() / 60
+
+        print('Dropping unecessary columns and duplicates...')
+        final_df = merged_data.drop(columns=['zhrs', 'exsecs','abstime', 'time','type','plate','location']).drop_duplicates(subset=['fullts','well','box'])
+
+        columns_order = ["fullts", "elapsed_time", "box", "well", "genotype", "data1"]
+        final_df = final_df[columns_order]
+
+        final_df.to_csv(output_file, index=False)
+        print(f"Saved prepped df to {output_file}")
+
         print('Done')
-        return merged_data
+        return final_df
 
     def convert_location_column(self, df, location_column="location"):
         """
@@ -461,7 +470,7 @@ class RawData(Experiment):
 
         return ddf
 
-    def plot_single_fish_activity(self, well, event_windows, title_prefix="", drug_app=None, filterY=None, figsize=(20, 12)):
+    def plot_single_fish_activity(self, well, event_windows, title_prefix="", drug_app=None, filterY=None, hue='genotype', figsize=(20, 12)):
         """
         Plots fish activity from a given dataframe with event highlights.
 
@@ -473,9 +482,6 @@ class RawData(Experiment):
         - figsize: tuple, figure size
         """
         df = self.df
-        # Ensure elapsed_time is calculated
-        reference_time = df['fullts'].min()
-        df['elapsed_time'] = (df['fullts'] - reference_time).dt.total_seconds() / 60
 
         # Filter data for the selected well
         if filterY:
@@ -483,11 +489,17 @@ class RawData(Experiment):
         else:
             fish_data = df[df['well'] == well]
 
-        genotype  = fish_data['genotype'].unique()[0]
-        suffix    = f"({well}, {genotype})"
+        if 'condition' in fish_data.columns:
+            condition = fish_data['condition'].unique()[0]
+            genotype  = fish_data['genotype'].unique()[0]
+            suffix    = f"({well}, {genotype}, {condition} mM)"
+        else:
+            genotype  = fish_data['genotype'].unique()[0]
+            suffix    = f"({well}, {genotype})"
 
         # Define the palette
         palette = sns.color_palette("hls", n_colors=df['genotype'].nunique())
+        # print(palette)
 
         # Global font size settings
         plt.rc('axes', titlesize=18)
@@ -499,7 +511,7 @@ class RawData(Experiment):
         fig, axes = plt.subplots(len(event_windows) + 1, 1, figsize=figsize)
 
         # Plot full data in the first subplot
-        sns.lineplot(ax=axes[0], x='elapsed_time', y='data1', data=fish_data, hue='genotype', palette=palette)
+        sns.lineplot(ax=axes[0], x='elapsed_time', y='data1', data=fish_data, hue=hue, palette=palette)
         for start, end, _ in event_windows:
             axes[0].axvspan(start, end, color='lightblue', alpha=0.3)
 
@@ -508,16 +520,16 @@ class RawData(Experiment):
         axes[0].set_title(f"{title_prefix} Raw Data {suffix}")
         axes[0].set_xlabel("Elapsed Time (minutes)")
         axes[0].set_ylabel("Δ Pixel")
-        axes[0].legend(title="Genotype", loc='best')
+        axes[0].legend(title=hue, loc='best')
 
         # Plot individual event windows
         for i, (start, end, title) in enumerate(event_windows):
             event_data = fish_data[(fish_data['elapsed_time'] > start) & (fish_data['elapsed_time'] < end)]
-            sns.lineplot(ax=axes[i + 1], x='elapsed_time', y='data1', data=event_data, hue='genotype')
-            axes[i + 1].set_title(f"{title_prefix} {title} {suffix}")
+            sns.lineplot(ax=axes[i + 1], x='elapsed_time', y='data1', data=event_data)
+            # axes[i + 1].set_title(f"{title_prefix} {title} {suffix}")
             axes[i + 1].set_xlabel("Elapsed Time (minutes)")
             axes[i + 1].set_ylabel("Δ Pixel")
-            axes[i + 1].legend(title="Genotype", loc='best')
+            # axes[i + 1].legend(title=hue, loc='best')
 
         plt.tight_layout()
         plt.show()
