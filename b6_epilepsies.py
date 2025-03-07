@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 import dask.dataframe as dd
 from dask.distributed import Client
 
+sns.set_theme(style="whitegrid")
+
 class Experiment:
     def __init__(self, date, box1, box2, exp, export=False, nbox=2, cbox=None, omit=None):
         self.date = date
@@ -186,7 +188,7 @@ class Experiment:
 
 class RawData(Experiment):
     def __init__(self, date, box1, box2, exp, export=False, nbox=2, cbox=None, omit=None):
-
+        print('Initialising RawData...')
         # Call the parent class's __init__
         super().__init__(date, box1, box2, exp, export, omit=omit)
 
@@ -264,8 +266,11 @@ class RawData(Experiment):
         print('Dropping unecessary columns and duplicates...')
         final_df = merged_data.drop(columns=['zhrs', 'exsecs','abstime', 'time','type','plate','location']).drop_duplicates(subset=['fullts','well','box'])
 
-        columns_order = ["fullts", "elapsed_time", "box", "well", "genotype", "data1"]
+        final_df_cols = ["fullts", "elapsed_time", "box", "well", "genotype", "data1"]
+
+        columns_order = final_df_cols + [col for col in final_df.columns if col not in final_df_cols]
         final_df = final_df[columns_order]
+        final_df.astype({'box':'int64'})
 
         final_df.to_csv(output_file, index=False)
         print(f"Saved prepped df to {output_file}")
@@ -470,6 +475,88 @@ class RawData(Experiment):
 
         return ddf
 
+    def plot_fish_count_hist(self, box_well_list, full_df=None, col='data1', threshold=40):
+        """
+        Plots a histogram of frame counts for single or multiple fish.
+
+        - If given one fish, it plots a single histogram.
+        - If given multiple fish, it arranges them in a subplot grid dynamically.
+
+        Usage:
+        all_hets = df_raw[df_raw["genotype"] == "HET"]
+        all_hets_grouped = list(all_hets.groupby(["box", "well"]))
+
+        # Extract (box, well) tuples
+        fish_list = [key for key, _ in all_hets_grouped]
+
+        # Pass all fish at once
+        ald_lys_obj_raw.plot_fish_count_hist(box_well_list=fish_list)
+        """
+        if full_df is None:
+            full_df = self.df
+
+        # Ensure input is a list of (box, well) tuples
+        if isinstance(box_well_list[0], (int, str)):
+            box_well_list = [box_well_list]
+
+        num_fish = len(box_well_list)
+
+        # Decide subplot layout (2 or 3 columns depending on odd/even count)
+        # cols = 2 if num_fish % 2 == 0 else 3
+        cols = 5
+        rows = int(np.ceil(num_fish / cols))  # Compute number of rows dynamically
+
+        # Create subplots
+        fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4), sharex=True)
+        axes = np.array(axes).flatten()  # Flatten for easy iteration
+
+        for i, box_well in enumerate(box_well_list):
+            box, well = box_well
+
+            # Filter data
+            fish_df = full_df[(full_df['box'] == box) & (full_df['well'] == well)]
+            df = fish_df.sort_values(by="fullts")
+
+            # print(box,type(int(box)), well, fish_df)
+            # Boolean column indicating if data1 is above the threshold
+            df["above_threshold"] = df[col] >= threshold
+
+            # Compute frame count durations
+            frame_count = 0
+            count_durations = []
+            above_threshold = False
+
+            for row in df.itertuples(index=False):
+                if row.above_threshold:
+                    if not above_threshold:
+                        frame_count = 1
+                        above_threshold = True
+                    else:
+                        frame_count += 1
+                else:
+                    if above_threshold:
+                        count_durations.append(frame_count)
+                        above_threshold = False
+                        frame_count = 0
+
+            if above_threshold:
+                count_durations.append(frame_count)
+
+            # print(fish_df['genotype'])
+            # Plot histogram
+            sns.histplot(count_durations, kde=True, edgecolor="black", alpha=0.7, ax=axes[i])
+            axes[i].set_yscale("log")
+            axes[i].set_xlabel("Frames")
+            axes[i].set_ylabel("log(Count)")
+            axes[i].set_title(f"Box: {box}, Well: {well}; {fish_df['genotype'].unique()[0]}")
+
+        # Remove unused subplots
+        # for j in range(i + 1, len(axes)):
+        #     fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.show()
+
     def plot_single_fish_activity(self, well, event_windows, title_prefix="", drug_app=None, filterY=None, hue='genotype', figsize=(20, 12)):
         """
         Plots fish activity from a given dataframe with event highlights.
@@ -538,7 +625,7 @@ class RawData(Experiment):
 class MiddurData(Experiment): #The output is not compatible with sleep analysis
     # def __init__(self, date, box1, box2, exp, export=False):
     def __init__(self, date, box1, box2, exp, export=False, nbox=2, cbox=None, omit=None):
-
+        print('Initialising MiddurData...')
         # Call the parent class's __init__
         super().__init__(date, box1, box2, exp, export, omit=omit)
 
@@ -607,7 +694,7 @@ class MiddurData(Experiment): #The output is not compatible with sleep analysis
         #
         # # Calculate the 'CLOCK' column based on the combined 'stdate' and 'sttime'
         # prepped_data['clock'] = self.calculate_clock(prepped_data['stdate_sttime'])
-        print('Finished prepping data.')
+        print('Done.')
 
         # self.correct_start_time = prepped_complete_data['stdate_sttime'].min()
 
