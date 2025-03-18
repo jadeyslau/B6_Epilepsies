@@ -218,7 +218,7 @@ class RawData(Experiment):
             mega_df_file = input_file
         else:
             if not os.path.exists(mega_df_file):
-                # self.combine_csv_files_dask()
+                self.combine_csv_files_dask()
                 # self.combine_csv_files()
                 print("The file does not exist. CSV files need to be combined. Exiting program.")
                 sys.exit()
@@ -621,6 +621,197 @@ class RawData(Experiment):
         plt.tight_layout()
         plt.show()
 
+    def detect_seizures(self, fish, upper_threshold=35, lower_threshold=2, min_frame_duration=25, min_ibi=3, plot=False):
+        # Define thresholds
+        # upper_threshold    = 35  # Activity level for potential seizure
+        # lower_threshold    = 2  # Defines "zero" or near-zero baseline
+        # min_frame_duration = 25  # Minimum frames required to qualify as a seizure event
+        # min_ibi            = 3  # Minimum interbout interval to confirm a separate event
+
+        # Ensure data is sorted by time (but maintain original index)
+        fish = fish.sort_values(by="fullts", ignore_index=True)
+
+        # Create a boolean column indicating if data1 is above the threshold
+        fish["above_threshold"] = fish["data1"] >= upper_threshold
+        fish["below_threshold"] = fish["data1"] <= lower_threshold
+
+        # Initialize variables
+        seizure_events = []  # Stores (start_index, end_index, duration, IBI)
+        temp_events    = []
+        in_seizure     = False  # Flag to track if we're currently in a seizure
+        start_index    = None  # To store the start of the bout
+        end_index      = None  # To store the end of the bout
+
+        next_start_index = None  # Tracks the next event's start
+
+        potential_event_end = None
+        frame_count = 0
+
+        # Convert DataFrame index to a list to ensure correct referencing
+        frame_indices = fish.index.tolist()
+
+        # Detect seizure events
+
+        for i, row in fish.iterrows():
+            # print(i)
+            if row["above_threshold"]:
+                # print(f"^ this one is above threshold ({upper_threshold})")
+                if not in_seizure:
+                    for j in range(i, -1, -1): # Look backward for bout start
+                        if fish.loc[j, 'below_threshold']:
+                            start_index = j
+                            # print("START: index=",start_index, "elapsed_time=",fishC2.loc[start_index, 'elapsed_time'])
+                            break
+                    in_seizure  = True
+                    frame_count = 0
+
+            else: # if row is not above upper threshold
+                if in_seizure: # but still in seizure and data1 is below the lower threshold
+
+
+                    if row["below_threshold"]:
+                        # print(f"This is below the lower bound ({lower_threshold})")
+                        if potential_event_end == None:
+                            potential_event_end = i
+                        else:
+                            frame_count += 1
+                        # print(f"This is a potential end; {frame_count}")
+                    else:
+                        # print('Above lower threshold count:',frame_count)
+                        if frame_count <= min_ibi: # This means that the event is still ongoing
+                            # duration  = potential_event_end - start_index
+                            potential_event_end = frame_count
+                            temp_event = (start_index, potential_event_end, frame_count, i)
+                            temp_events.append(temp_event)
+                            # print(f"temp_event: {temp_event}")
+                            frame_count = 0
+
+                        elif len(temp_events)>0:
+                            # print(f"temp_events: {temp_events}")
+                            last_temp_event = temp_events.pop()
+
+                            end_index = last_temp_event[3]+1
+                            duration  = end_index - start_index
+                            ibi       = (i-1) - end_index
+                            # print(i)
+                            event     = (start_index, end_index, duration, ibi)
+                            if duration > min_frame_duration:
+                                seizure_events.append(event)
+                            temp_events     = []
+
+
+                        else:
+
+
+                            end_index = potential_event_end
+                            ibi       = frame_count
+                            duration  = end_index - start_index
+                            # print(temp_events)
+
+                            if duration > min_frame_duration:
+                                seizure_events.append((start_index, end_index, duration, ibi))
+                                # print(f'START: {start_index}, END: {end_index}, ibi: {ibi}')
+                                start_index = end_index + ibi
+
+                            in_seizure = False
+                            end_index = None
+                            potential_event_end = None  # Reset temporary marker
+                            frame_count = 0
+                            # temp_events = []
+
+        #TODO
+        # if in_seizure:
+        #     duration = len(fishC2) - start_index
+        #     if duration > min_frame_duration:
+        #         ibi = start_index - last_end_index if last_end_index is not None else None
+        #         seizure_events.append((start_index, len(fishC2) - 1, duration, ibi))
+
+
+            # if i == 300: break
+
+        # Convert seizure events to DataFrame
+        self.seizure_df = pd.DataFrame(seizure_events, columns=["start", "end", "duration", "IBI"])
+
+        # # Select 5 random seizure events (if available)
+        # num_events_to_plot = min(10, len(seizure_df))
+        # selected_events = seizure_df.sample(n=num_events_to_plot, random_state=42)
+        # # selected_events = seizure_df.loc[:10]
+        # print(f"Number of Seizure Events detected: {len(seizure_df)} ({fish['well'][0]}, {fish['genotype'][0]})")
+        #
+        # # Plot selected seizure events
+        # for _, event in selected_events.iterrows():
+        #     start, end = event["start"], event["end"]
+        #
+        #     # Extend the window by 5 frames before and after the event
+        #     start_idx = max(frame_indices.index(start) - 20, 0)
+        #     end_idx = min(frame_indices.index(end) + 20, len(frame_indices) - 1)
+        #
+        #     # Get the actual frame indices
+        #     # plot_start = frame_indices[start_idx]
+        #     # plot_end = frame_indices[end_idx]
+        #     plot_start = start_idx
+        #     plot_end = end_idx
+        #
+        #     # Extract subset of data for plotting
+        #     subset = fish.loc[plot_start:plot_end]
+        #
+        #     # Plot the selected event window
+        #     plt.figure(figsize=(8, 4))
+        #     plt.plot(subset.index, subset["data1"], color="blue", label="Activity Data")
+        #     plt.axvspan(start, end, color="red", alpha=0.1, label="'Potential Seizure' Event")
+        #
+        #     # Formatting
+        #     plt.axhline(y=upper_threshold, color='black', linestyle='--', label=f"Threshold ({upper_threshold})")
+        #     plt.axhline(y=lower_threshold, color='gray', linestyle=':', label=f"Baseline ({lower_threshold})")
+        #     plt.xlabel("Frame Index")
+        #     plt.ylabel("Δ Pixel")
+        #     plt.title(f"'Potential Seizure' Event from Frame {start} to {end} ({event['duration']})")
+        #     plt.legend()
+        #     plt.show()
+        if plot:
+            self.plot_events(fish, frame_indices, upper_threshold, lower_threshold)
+
+
+        return self.seizure_df
+
+    def plot_events(self, fish, frame_indices, upper_threshold, lower_threshold):
+        # Select 5 random seizure events (if available)
+        num_events_to_plot = min(10, len(self.seizure_df))
+        selected_events = self.seizure_df.sample(n=num_events_to_plot, random_state=42)
+        # selected_events = seizure_df.loc[:10]
+        print(f"Number of Seizure Events detected: {len(self.seizure_df)} ({fish['well'][0]}, {fish['genotype'][0]})")
+
+        # Plot selected seizure events
+        for _, event in selected_events.iterrows():
+            start, end = event["start"], event["end"]
+
+            # Extend the window by 5 frames before and after the event
+            start_idx = max(frame_indices.index(start) - 20, 0)
+            end_idx = min(frame_indices.index(end) + 20, len(frame_indices) - 1)
+
+            # Get the actual frame indices
+            # plot_start = frame_indices[start_idx]
+            # plot_end = frame_indices[end_idx]
+            plot_start = start_idx
+            plot_end = end_idx
+
+            # Extract subset of data for plotting
+            subset = fish.loc[plot_start:plot_end]
+
+            # Plot the selected event window
+            plt.figure(figsize=(8, 4))
+            plt.plot(subset.index, subset["data1"], color="blue", label="Activity Data")
+            plt.axvspan(start, end, color="red", alpha=0.1, label="'Potential Seizure' Event")
+
+            # Formatting
+            plt.axhline(y=upper_threshold, color='black', linestyle='--', label=f"Threshold ({upper_threshold})")
+            plt.axhline(y=lower_threshold, color='gray', linestyle=':', label=f"Baseline ({lower_threshold})")
+            plt.xlabel("Frame Index")
+            plt.ylabel("Δ Pixel")
+            plt.title(f"'Potential Seizure' Event from Frame {start} to {end} ({event['duration']})")
+            plt.legend()
+            plt.show()
+
 
 class MiddurData(Experiment): #The output is not compatible with sleep analysis
     # def __init__(self, date, box1, box2, exp, export=False):
@@ -673,19 +864,8 @@ class MiddurData(Experiment): #The output is not compatible with sleep analysis
         # merged_data['genotype'].fillna('WT', inplace=True)
         merged_data['genotype'].dropna(inplace=True)
 
-        #
-        # print(merged_data['condition'].unique())
-        # empty = merged_data['genotype'].isin(['empty', 'excluded'])
-        # print(merged_data.iloc[4411],empty)
 
-        # # Remove rows where 'genotype' is 'empty', None, or an empty string
-        # # merged_data = merged_data[~merged_data['genotype'].isin(['empty', 'excluded', None, '']) & ~merged_data['condition'].isin(['empty', 'excluded', None, ''])]
-        # merged_data = merged_data[~merged_data['genotype'].isin(['empty', 'excluded', 'NaN'])]
         merged_data = merged_data[~merged_data['genotype'].isin(['empty', 'NaN'])]
-        #
-        # # Drop rows where Genotype or Treatment is explicitly marked as "empty"
-        # prepped_data = merged_data[(merged_data['genotype'] != 'empty') & (merged_data['condition'] != 'empty')]
-        # prepped_data = merged_data[(merged_data['genotype'] != 'empty')]
 
         prepped_filtered_data = self.filter_df_by_omit(merged_data, self.omit)
 
