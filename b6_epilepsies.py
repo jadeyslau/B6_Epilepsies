@@ -17,12 +17,20 @@ import matplotlib.patches as mpatches
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial.distance import cdist
+from scipy.stats import shapiro, normaltest, kruskal, mannwhitneyu, f_oneway, ttest_ind
+from statannotations.Annotator import Annotator
 
 from concurrent.futures import ThreadPoolExecutor
 import dask.dataframe as dd
 from dask.distributed import Client
 
+import zipfile
+import json
+import xml.etree.ElementTree as ET
+import pandas as pd
+
 sns.set_theme(style="whitegrid")
+plt.rcParams['savefig.transparent'] = True
 
 class Experiment:
     def __init__(self, date, box1, box2, exp, export=False, nbox=2, cbox=None, omit=None):
@@ -185,98 +193,301 @@ class Experiment:
             "Genotype Map Files" : [genotype_map_files, len(genotype_map_files)],
             "Condition Map Files": [cond_map_files,len(cond_map_files)]}
 
-
 class RawData(Experiment):
     def __init__(self, date, box1, box2, exp, export=False, nbox=2, cbox=None, omit=None):
         print('Initialising RawData...')
         # Call the parent class's __init__
         super().__init__(date, box1, box2, exp, export, omit=omit)
 
-        processed_path = f"{self.path}{self.name}_processed.csv"
+        processed_file = f"{self.path}{self.name}_processed.csv"
+        raw_file       = f"{self.path}{self.name}_raw_df.csv"
 
-        if not os.path.exists(processed_path):
-            self.df = self.prepare_raw_data()
+        if not os.path.exists(raw_file):
+            print('_raw_df.csv not found. Need to combine.')
+            raw_df  = self.combine_csv_files_dask()
+            print('CSV Files combined')
+            self.df = self.prepare_raw_data(raw_file)
+            # self.df = pd.read_csv(processed_file)
+            print('Complete.')
+        elif not os.path.exists(processed_file):
+            self.df = self.prepare_raw_data(raw_file)
         else:
-            print(f'Instantiated using {processed_path}, no need to prepare raw data.')
-            self.df = pd.read_csv(processed_path)
+            print(f'Instantiated using {processed_file}, no need to prepare raw data.')
+            self.df = pd.read_csv(processed_file)
             print('Done.')
-        # self.df = self.prepare_raw_data()
 
-        # if self.omit is None:
-        #     return None
+        # mega_df_file = f"{self.path}{self.name}_raw_df.csv"
+        # output_file  = f"{self.path}{self.name}_processed.csv"
+        # # mega_df_file_parquet = f"{self.path}{self.name}_raw_df.parquet"
+        #
+        # cols         = ["abstime", "time", "type", "location", "data1"]
+        #
+        # if input_file:
+        #     mega_df_file = input_file
         # else:
-        #     return None
-
-    def prepare_raw_data(self, input_file=None):
-        mega_df_file = f"{self.path}{self.name}_raw_df.csv"
-        output_file  = f"{self.path}{self.name}_processed.csv"
-        # mega_df_file_parquet = f"{self.path}{self.name}_raw_df.parquet"
-
-        cols         = ["abstime", "time", "type", "location", "data1"]
-
-        if input_file:
-            mega_df_file = input_file
-        else:
-            if not os.path.exists(mega_df_file):
-                self.combine_csv_files_dask()
-                # self.combine_csv_files()
-                print("The file does not exist. CSV files need to be combined. Exiting program.")
-                sys.exit()
-
-            print(f"Preparing data from {mega_df_file}.")
-            dirty_data = pd.read_csv(mega_df_file, usecols=cols)
-
-        # dirty_data = pd.read_parquet(mega_df_file_parquet, columns=cols)
-
-        # Filter rows and create a copy
-        filtered_df = dirty_data[dirty_data['type'] == 101].copy()
-
-        # ADJUST TIME
-        # Vectorized operations for creating new columns
-        time_in_seconds = filtered_df["time"] / 1_000_000
-        filtered_df.loc[:, "fullts"] = self.correct_start_time + pd.to_timedelta(time_in_seconds, unit="s")
-        filtered_df.loc[:, "zhrs"] = (filtered_df["fullts"] - pd.Timestamp(self.zt0)).dt.total_seconds() / 3600
-        filtered_df.loc[:, "exsecs"] = time_in_seconds
+        #     if not os.path.exists(mega_df_file):
+        #         self.combine_csv_files_dask()
+        #         # self.combine_csv_files()
+        #         print("The file does not exist. CSV files need to be combined. Exiting program.")
+        #         sys.exit()
+        #
+        #     print(f"Preparing data from {mega_df_file}.")
+        #     dirty_data = pd.read_csv(mega_df_file, usecols=cols)
 
 
-        # Move the new columns to the front
-        # columns_order = ["fullts", "zhrs", "exsecs"] + [col for col in filtered_df.columns if col not in ["fullts", "zhrs", "exsecs"]]
-        # filtered_df = filtered_df[columns_order]
+    # def prepare_raw_data(self, input_file=None):
+    #     # mega_df_file = f"{self.path}{self.name}_raw_df.csv"
+    #     output_file  = f"{self.path}{self.name}_processed.csv"
+    #     # # mega_df_file_parquet = f"{self.path}{self.name}_raw_df.parquet"
+    #     #
+    #     cols         = ["abstime", "time", "type", "location", "data1"]
+    #     #
+    #     # if input_file:
+    #     #     mega_df_file = input_file
+    #     # else:
+    #     #     if not os.path.exists(mega_df_file):
+    #     #         self.combine_csv_files_dask()
+    #     #         # self.combine_csv_files()
+    #     #         print("The file does not exist. CSV files need to be combined. Exiting program.")
+    #     #         sys.exit()
+    #     #
+    #     #     print(f"Preparing data from {mega_df_file}.")
+    #     #     dirty_data = pd.read_csv(mega_df_file, usecols=cols)
+    #
+    #     # dirty_data = pd.read_parquet(mega_df_file_parquet, columns=cols)
+    #
+    #     dirty_data = pd.read_csv(input_file, usecols=cols)
+    #
+    #
+    #     # Filter rows and create a copy
+    #     filtered_df = dirty_data[dirty_data['type'] == 101].copy()
+    #
+    #     # ADJUST TIME
+    #     # Vectorized operations for creating new columns
+    #     time_in_seconds = filtered_df["time"] / 1_000_000
+    #     filtered_df.loc[:, "fullts"] = self.correct_start_time + pd.to_timedelta(time_in_seconds, unit="s")
+    #     filtered_df.loc[:, "zhrs"] = (filtered_df["fullts"] - pd.Timestamp(self.zt0)).dt.total_seconds() / 3600
+    #     filtered_df.loc[:, "exsecs"] = time_in_seconds
+    #
+    #
+    #     # Move the new columns to the front
+    #     # columns_order = ["fullts", "zhrs", "exsecs"] + [col for col in filtered_df.columns if col not in ["fullts", "zhrs", "exsecs"]]
+    #     # filtered_df = filtered_df[columns_order]
+    #
+    #     genotype_df = self.get_genotype_df()
+    #
+    #     # Adds columns box. well, and plate
+    #     filtered_df = self.convert_location_column(filtered_df)
+    #
+    #     if self.cond_map_files:
+    #         condition_df = self.get_condition_df()
+    #         # Merge data on Location and Box
+    #         merged_data = filtered_df.merge(genotype_df, on=['box', 'well'], how='left').merge(condition_df, on=['box', 'well'], how='left')
+    #     else:
+    #         merged_data = filtered_df.merge(genotype_df, on=['box', 'well'], how='left')
+    #
+    #
+    #     merged_data['genotype'].dropna(inplace=True)
+    #     merged_data = merged_data[~merged_data['genotype'].isin(['empty', 'NaN', np.nan])]
+    #
+    #     # Ensure elapsed_time is calculated
+    #     reference_time = merged_data['fullts'].min()
+    #     merged_data['elapsed_time'] = (merged_data['fullts'] - reference_time).dt.total_seconds() / 60
+    #
+    #     print('Dropping unecessary columns and duplicates...')
+    #     final_df = merged_data.drop(columns=['zhrs', 'exsecs','abstime', 'time','type','plate','location']).drop_duplicates(subset=['fullts','well','box'])
+    #
+    #     final_df_cols = ["fullts", "elapsed_time", "box", "well", "genotype", "data1"]
+    #
+    #     columns_order = final_df_cols + [col for col in final_df.columns if col not in final_df_cols]
+    #     final_df = final_df[columns_order]
+    #     final_df.astype({'box':'int64'})
+    #
+    #     final_df.to_csv(output_file, index=False)
+    #     print(f"Saved prepped df to {output_file}")
+    #
+    #     print('Done')
+    #     return final_df
+
+    # def prepare_raw_data(self, input_file=None):
+    #     output_file = f"{self.path}{self.name}_processed.csv"
+    #     cols = ["abstime", "time", "type", "location", "data1"]
+    #
+    #     # Determine source file
+    #     if input_file is None:
+    #         parquet_file = f"{self.path}{self.name}_raw_df.parquet"
+    #         csv_file = f"{self.path}{self.name}_raw_df.csv"
+    #
+    #         if not os.path.exists(parquet_file):
+    #             if os.path.exists(csv_file):
+    #                 print("Parquet not found — converting from CSV (one-time step)...")
+    #                 self.combine_csv_to_parquet()
+    #             else:
+    #                 print("No raw data found. Running combine step first...")
+    #                 self.combine_csv_files_dask()
+    #                 self.combine_csv_to_parquet()
+    #
+    #         print(f"Reading from {parquet_file}")
+    #         dirty_data = pd.read_parquet(parquet_file, columns=cols)
+    #     else:
+    #         # Allow CSV or parquet input
+    #         if input_file.endswith('.parquet'):
+    #             dirty_data = pd.read_parquet(input_file, columns=cols)
+    #         else:
+    #             dirty_data = pd.read_csv(input_file, usecols=cols)
+    #
+    #     # Filter early
+    #     filtered_df = dirty_data[dirty_data['type'] == 101].copy()
+    #     del dirty_data  # free memory immediately
+    #
+    #     # Time columns
+    #     time_in_seconds = filtered_df["time"] / 1_000_000
+    #     filtered_df["fullts"] = self.correct_start_time + pd.to_timedelta(time_in_seconds, unit="s")
+    #
+    #     # Merge genotype + conditions
+    #     filtered_df = self.convert_location_column(filtered_df)
+    #     genotype_df = self.get_genotype_df()
+    #
+    #     if self.cond_map_files:
+    #         condition_df = self.get_condition_df()
+    #         merged_data = (filtered_df
+    #                        .merge(genotype_df, on=['box', 'well'], how='left')
+    #                        .merge(condition_df, on=['box', 'well'], how='left'))
+    #     else:
+    #         merged_data = filtered_df.merge(genotype_df, on=['box', 'well'], how='left')
+    #
+    #     del filtered_df
+    #
+    #     # Clean genotypes
+    #     merged_data = merged_data[
+    #         merged_data['genotype'].notna() &
+    #         ~merged_data['genotype'].isin(['empty', 'NaN'])
+    #     ]
+    #
+    #     # Elapsed time
+    #     reference_time = merged_data['fullts'].min()
+    #     merged_data['elapsed_time'] = (merged_data['fullts'] - reference_time).dt.total_seconds() / 60
+    #
+    #     # Tidy up
+    #     drop_cols = ['abstime', 'time', 'type', 'plate', 'location']
+    #     drop_cols = [c for c in drop_cols if c in merged_data.columns]
+    #     final_df = (merged_data
+    #                 .drop(columns=drop_cols)
+    #                 .drop_duplicates(subset=['fullts', 'well', 'box'])
+    #                 .astype({'box': 'int64'}))
+    #
+    #     final_df_cols = ["fullts", "elapsed_time", "box", "well", "genotype", "data1"]
+    #     columns_order = final_df_cols + [c for c in final_df.columns if c not in final_df_cols]
+    #     final_df = final_df[columns_order]
+    #
+    #     # Still saves as CSV for your downstream steps
+    #     final_df.to_csv(output_file, index=False)
+    #     print(f"Saved prepped df to {output_file}")
+    #     return final_df
+
+    def prepare_raw_data(self, input_file=None, chunk_size=500_000):
+        output_file = f"{self.path}{self.name}_processed.csv"
+        cols = ["abstime", "time", "type", "location", "data1"]
+
+        if input_file is None:
+            input_file = f"{self.path}{self.name}_raw_df.csv"
 
         genotype_df = self.get_genotype_df()
+        condition_df = self.get_condition_df() if self.cond_map_files else None
 
-        # Adds columns box. well, and plate
-        filtered_df = self.convert_location_column(filtered_df)
+        print(f"Processing {input_file} in chunks of {chunk_size}...")
 
-        if self.cond_map_files:
-            condition_df = self.get_condition_df()
-            # Merge data on Location and Box
-            merged_data = filtered_df.merge(genotype_df, on=['box', 'well'], how='left').merge(condition_df, on=['box', 'well'], how='left')
-        else:
-            merged_data = filtered_df.merge(genotype_df, on=['box', 'well'], how='left')
+        # --- Pass 1: filter, merge, write to temp file ---
+        temp_file = f"{self.path}{self.name}_temp.csv"
+        first_chunk = True
+        total_rows = 0
 
+        for i, chunk in enumerate(pd.read_csv(input_file, usecols=cols, chunksize=chunk_size)):
+            chunk = chunk[chunk['type'] == 101].copy()
 
-        merged_data['genotype'].dropna(inplace=True)
-        merged_data = merged_data[~merged_data['genotype'].isin(['empty', 'NaN', np.nan])]
+            if chunk.empty:
+                print(f"  Chunk {i+1}: no type==101 rows, skipping")
+                continue
 
-        # Ensure elapsed_time is calculated
-        reference_time = merged_data['fullts'].min()
-        merged_data['elapsed_time'] = (merged_data['fullts'] - reference_time).dt.total_seconds() / 60
+            time_in_seconds = chunk["time"] / 1_000_000
+            chunk["fullts"] = self.correct_start_time + pd.to_timedelta(time_in_seconds, unit="s")
 
-        print('Dropping unecessary columns and duplicates...')
-        final_df = merged_data.drop(columns=['zhrs', 'exsecs','abstime', 'time','type','plate','location']).drop_duplicates(subset=['fullts','well','box'])
+            chunk = self.convert_location_column(chunk)
+            chunk = chunk.merge(genotype_df, on=['box', 'well'], how='left')
+            if condition_df is not None:
+                chunk = chunk.merge(condition_df, on=['box', 'well'], how='left')
+
+            chunk = chunk[
+                chunk['genotype'].notna() &
+                ~chunk['genotype'].isin(['empty', 'NaN'])
+            ]
+
+            drop_cols = [c for c in ['abstime', 'time', 'type', 'plate', 'location']
+                         if c in chunk.columns]
+            chunk = chunk.drop(columns=drop_cols)
+
+            chunk.to_csv(temp_file, mode='w' if first_chunk else 'a',
+                         header=first_chunk, index=False)
+            total_rows += len(chunk)
+            first_chunk = False
+            print(f"  Chunk {i+1}: kept {len(chunk)} rows (total so far: {total_rows})")
+
+            del chunk
+            import gc; gc.collect()
+
+        if first_chunk:
+            print("No valid data found!")
+            return pd.DataFrame()
+
+        # --- Pass 2: read the much smaller temp file for elapsed_time + dedup ---
+        print(f"Pass 2: reading {total_rows} processed rows for elapsed_time + dedup...")
+        final_df = pd.read_csv(temp_file, parse_dates=['fullts'])
+
+        reference_time = final_df['fullts'].min()
+        final_df['elapsed_time'] = (final_df['fullts'] - reference_time).dt.total_seconds() / 60
+        final_df = final_df.drop_duplicates(subset=['fullts', 'well', 'box'])
+        final_df = final_df.astype({'box': 'int64'})
 
         final_df_cols = ["fullts", "elapsed_time", "box", "well", "genotype", "data1"]
-
-        columns_order = final_df_cols + [col for col in final_df.columns if col not in final_df_cols]
+        columns_order = final_df_cols + [c for c in final_df.columns if c not in final_df_cols]
         final_df = final_df[columns_order]
-        final_df.astype({'box':'int64'})
 
         final_df.to_csv(output_file, index=False)
-        print(f"Saved prepped df to {output_file}")
+        os.remove(temp_file)  # clean up
 
-        print('Done')
+        print(f"Saved to {output_file} — shape: {final_df.shape}")
         return final_df
+
+    def combine_csv_to_parquet(self, chunk_size=500_000):
+        """
+        Convert the mega CSV to parquet in chunks, keeping your existing
+        CSV combine step but producing a much faster-to-read output.
+        """
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        csv_file = f"{self.path}{self.name}_raw_df.csv"
+        parquet_file = f"{self.path}{self.name}_raw_df.parquet"
+        cols = ["abstime", "time", "type", "location", "data1"]
+
+        if not os.path.exists(csv_file):
+            self.combine_csv_files_dask()
+
+        print(f"Converting {csv_file} to parquet in chunks...")
+        writer = None
+
+        for i, chunk in enumerate(pd.read_csv(csv_file, usecols=cols, chunksize=chunk_size)):
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(parquet_file, table.schema, compression='snappy')
+            writer.write_table(table)
+            print(f"  Written chunk {i + 1} ({len(chunk)} rows)")
+
+        if writer:
+            writer.close()
+
+        print(f"Saved parquet to {parquet_file}")
+        return parquet_file
 
     def convert_location_column(self, df, location_column="location"):
         """
@@ -477,6 +688,9 @@ class RawData(Experiment):
 
     def plot_fish_count_hist(self, box_well_list, full_df=None, col='data1', threshold=40):
         """
+        I AM NOT SURE THIS METHOD IS USEFUL ANYMORE, MAY DELETE LATER. JL
+        THIS IS THE FIRST V RUDIMENTARY COUNT OF 'EVENTS' WHICH ONLY COUNTS FRAME ABOVE THRESHOLD
+
         Plots a histogram of frame counts for single or multiple fish.
 
         - If given one fish, it plots a single histogram.
@@ -491,6 +705,10 @@ class RawData(Experiment):
 
         # Pass all fish at once
         ald_lys_obj_raw.plot_fish_count_hist(box_well_list=fish_list)
+
+        OR
+        ald_lys_obj_raw.plot_fish_count_hist(box_well_list=fish_list, full_df=df_smoothed, col='smoothed_data1')
+
         """
         if full_df is None:
             full_df = self.df
@@ -557,7 +775,7 @@ class RawData(Experiment):
         plt.tight_layout()
         plt.show()
 
-    def plot_single_fish_activity(self, well, event_windows, title_prefix="", drug_app=None, filterY=None, hue='genotype', figsize=(20, 12)):
+    def plot_single_fish_activity(self, well, event_windows, title_prefix="", drug_app=None, filterY=None, hue='genotype', figsize=(20, 18)):
         """
         Plots fish activity from a given dataframe with event highlights.
 
@@ -567,7 +785,17 @@ class RawData(Experiment):
         - event_windows: list of tuples, each tuple contains (start_time, end_time, title)
         - title_prefix: str, prefix for subplot titles
         - figsize: tuple, figure size
+
+        Usage:
+        pnpo_ptz_obj_raw.plot_single_fish_activity(well='H2', event_windows=[
+            (13, 13.5, "Seizure Event, Example 1"),
+            (22.8, 23.3, "Seizure Event, Example 2"),
+            (29.7, 30.2, "Seizure Event, Example 3"),
+            (38, 38.5, "Normal Swimming Period, Example 4")
+        ], drug_app=[5, 11.37], filterY=150, hue='condition')
         """
+
+
         df = self.df
 
         # Filter data for the selected well
@@ -577,6 +805,7 @@ class RawData(Experiment):
             fish_data = df[df['well'] == well]
 
         if 'condition' in fish_data.columns:
+            fish_data['condition'] = fish_data['condition'].astype(int)
             condition = fish_data['condition'].unique()[0]
             genotype  = fish_data['genotype'].unique()[0]
             suffix    = f"({well}, {genotype}, {condition} mM)"
@@ -589,18 +818,32 @@ class RawData(Experiment):
         # print(palette)
 
         # Global font size settings
-        plt.rc('axes', titlesize=18)
-        plt.rc('axes', labelsize=16)
-        plt.rc('xtick', labelsize=14)
-        plt.rc('ytick', labelsize=14)
+        # plt.rc('axes', titlesize=18)
+        # plt.rc('axes', labelsize=16)
+        # plt.rc('xtick', labelsize=14)
+        # plt.rc('ytick', labelsize=14)
+
+        plt.rcParams.update({
+            'axes.titlesize': 28,     # subplot titles
+            'axes.labelsize': 28,     # x/y axis labels
+            'xtick.labelsize': 28,    # x-axis tick labels
+            'ytick.labelsize': 28,    # y-axis tick labels
+            'legend.fontsize': 28,    # legend text
+            'figure.titlesize': 36    # overall figure title (if used)
+        })
+
 
         # Create figure with subplots
         fig, axes = plt.subplots(len(event_windows) + 1, 1, figsize=figsize)
 
+        # This is just for the first plot
+        unique_value = fish_data[hue].dropna().unique()[0]
+        palette = {unique_value: '#bd2904'}
+
         # Plot full data in the first subplot
         sns.lineplot(ax=axes[0], x='elapsed_time', y='data1', data=fish_data, hue=hue, palette=palette)
         for start, end, _ in event_windows:
-            axes[0].axvspan(start, end, color='lightblue', alpha=0.3)
+            axes[0].axvspan(start, end, color='lightblue', alpha=0.5)
 
         if drug_app: axes[0].axvspan(drug_app[0], drug_app[1], color='lightgray', alpha=0.3)
 
@@ -609,19 +852,159 @@ class RawData(Experiment):
         axes[0].set_ylabel("Δ Pixel")
         axes[0].legend(title=hue, loc='best')
 
+        if 'condition' in fish_data.columns:
+            legend = axes[0].legend(title="[PTZ]")
+            legend.set_title("[PTZ]", prop={'size': 28})
+        else:
+            legend = axes[0].legend(title="Full Trace")
+            legend.set_title("Full Trace", prop={'size': 28})
+
         # Plot individual event windows
         for i, (start, end, title) in enumerate(event_windows):
             event_data = fish_data[(fish_data['elapsed_time'] > start) & (fish_data['elapsed_time'] < end)]
             sns.lineplot(ax=axes[i + 1], x='elapsed_time', y='data1', data=event_data)
-            # axes[i + 1].set_title(f"{title_prefix} {title} {suffix}")
+            axes[i + 1].set_title(f"{title_prefix} {title}")# {suffix}")
             axes[i + 1].set_xlabel("Elapsed Time (minutes)")
             axes[i + 1].set_ylabel("Δ Pixel")
             # axes[i + 1].legend(title=hue, loc='best')
 
-        plt.tight_layout()
+        plt.tight_layout(h_pad=4)
+
+        save_path = f"{self.path}{self.name}_single_plot_{well}.svg"
+        # Save as SVG
+        plt.savefig(save_path, format='svg', bbox_inches='tight')
+        print(f"Plot saved to: {save_path}")
+
+
         plt.show()
 
-    def detect_seizures(self, fish, upper_threshold=35, lower_threshold=2, min_frame_duration=25, min_ibi=3, plot=False):
+    # def detect_seizures_v1(self, fish, upper_threshold=35, lower_threshold=2, min_frame_duration=25, min_ibi=3, plot=False):
+    #     # Define thresholds
+    #     # upper_threshold    = 35  # Activity level for potential seizure
+    #     # lower_threshold    = 2  # Defines "zero" or near-zero baseline
+    #     # min_frame_duration = 25  # Minimum frames required to qualify as a seizure event
+    #     # min_ibi            = 3  # Minimum interbout interval to confirm a separate event
+    #
+    #     # Ensure data is sorted by time (but maintain original index)
+    #     fish = fish.sort_values(by="fullts", ignore_index=True)
+    #
+    #     # Create a boolean column indicating if data1 is above the threshold
+    #     fish["above_threshold"] = fish["data1"] >= upper_threshold
+    #     fish["below_threshold"] = fish["data1"] <= lower_threshold
+    #
+    #     # Initialize variables
+    #     seizure_events = []  # Stores (start_index, end_index, duration, IBI)
+    #     temp_events    = []
+    #     in_seizure     = False  # Flag to track if we're currently in a seizure
+    #     start_index    = None  # To store the start of the bout
+    #     end_index      = None  # To store the end of the bout
+    #
+    #     next_start_index = None  # Tracks the next event's start
+    #
+    #     potential_event_end = None
+    #     frame_count = 0
+    #
+    #     # Convert DataFrame index to a list to ensure correct referencing
+    #     frame_indices = fish.index.tolist()
+    #
+    #     # Detect seizure events
+    #
+    #     for i, row in fish.iterrows():
+    #         # print(i)
+    #         if row["above_threshold"]:
+    #             # print(f"^ this one is above threshold ({upper_threshold})")
+    #             if not in_seizure:
+    #                 for j in range(i, -1, -1): # Look backward for bout start
+    #                     if fish.loc[j, 'below_threshold']:
+    #                         start_index = j
+    #                         # print("START: index=",start_index, "elapsed_time=",fishC2.loc[start_index, 'elapsed_time'])
+    #                         break
+    #
+    #                 # Fix: If no below_threshold was found, default to i
+    #                 if start_index is None:
+    #                     start_index = i  # Assign i to prevent NoneType errors
+    #
+    #                 in_seizure  = True
+    #                 frame_count = 0
+    #
+    #         else: # if row is not above upper threshold
+    #             if in_seizure: # but still in seizure and data1 is below the lower threshold
+    #
+    #
+    #                 if row["below_threshold"]:
+    #                     # print(f"This is below the lower bound ({lower_threshold})")
+    #                     if potential_event_end == None:
+    #                         potential_event_end = i
+    #                     else:
+    #                         frame_count += 1
+    #                     # print(f"This is a potential end; {frame_count}")
+    #                 else:
+    #                     # print('Above lower threshold count:',frame_count)
+    #                     if frame_count <= min_ibi: # This means that the event is still ongoing
+    #                         # duration  = potential_event_end - start_index
+    #                         potential_event_end = frame_count
+    #                         temp_event = (start_index, potential_event_end, frame_count, i)
+    #                         temp_events.append(temp_event)
+    #                         # print(f"temp_event: {temp_event}")
+    #                         frame_count = 0
+    #
+    #                     elif len(temp_events)>0:
+    #                         # print(f"temp_events: {temp_events}")
+    #                         last_temp_event = temp_events.pop()
+    #
+    #                         end_index = last_temp_event[3]+1
+    #                         duration  = end_index - start_index
+    #                         ibi       = (i-1) - end_index
+    #                         # print(i)
+    #                         event     = (start_index, end_index, duration, ibi)
+    #                         if duration > min_frame_duration:
+    #                             seizure_events.append(event)
+    #                         temp_events     = []
+    #
+    #
+    #                     else:
+    #
+    #
+    #                         end_index = potential_event_end
+    #                         ibi       = frame_count
+    #                         duration  = end_index - start_index
+    #                         # print(temp_events)
+    #
+    #                         if duration > min_frame_duration:
+    #                             seizure_events.append((start_index, end_index, duration, ibi))
+    #                             # print(f'START: {start_index}, END: {end_index}, ibi: {ibi}')
+    #                             start_index = end_index + ibi
+    #
+    #                         in_seizure = False
+    #                         end_index = None
+    #                         potential_event_end = None  # Reset temporary marker
+    #                         frame_count = 0
+    #                         # temp_events = []
+    #
+    #     #TODO
+    #     # if in_seizure:
+    #     #     duration = len(fishC2) - start_index
+    #     #     if duration > min_frame_duration:
+    #     #         ibi = start_index - last_end_index if last_end_index is not None else None
+    #     #         seizure_events.append((start_index, len(fishC2) - 1, duration, ibi))
+    #
+    #
+    #         # if i == 300: break
+    #
+    #     # Convert seizure events to DataFrame
+    #     seizure_df = pd.DataFrame(seizure_events, columns=["start", "end", "duration", "IBI"])
+    #
+    #     # Convert 'duration' and 'IBI' to numeric immediately
+    #     seizure_df['duration'] = pd.to_numeric(seizure_df['duration'], errors='coerce')
+    #     seizure_df['IBI'] = pd.to_numeric(seizure_df['IBI'], errors='coerce')
+    #
+    #     if plot:
+    #         self.plot_events(fish, seizure_df, frame_indices, upper_threshold, lower_threshold)
+    #
+    #
+    #     return seizure_df
+
+    def detect_seizures(self, fish, upper_threshold=35, lower_threshold=2, min_frame_duration=25, min_ibi=3  , plot=False):
         # Define thresholds
         # upper_threshold    = 35  # Activity level for potential seizure
         # lower_threshold    = 2  # Defines "zero" or near-zero baseline
@@ -662,6 +1045,11 @@ class RawData(Experiment):
                             start_index = j
                             # print("START: index=",start_index, "elapsed_time=",fishC2.loc[start_index, 'elapsed_time'])
                             break
+
+                    # Fix: If no below_threshold was found, default to i
+                    if start_index is None:
+                        start_index = i  # Assign i to prevent NoneType errors
+
                     in_seizure  = True
                     frame_count = 0
 
@@ -730,56 +1118,99 @@ class RawData(Experiment):
             # if i == 300: break
 
         # Convert seizure events to DataFrame
-        self.seizure_df = pd.DataFrame(seizure_events, columns=["start", "end", "duration", "IBI"])
+        seizure_df = pd.DataFrame(seizure_events, columns=["start", "end", "duration", "IBI"])
 
-        # # Select 5 random seizure events (if available)
-        # num_events_to_plot = min(10, len(seizure_df))
-        # selected_events = seizure_df.sample(n=num_events_to_plot, random_state=42)
-        # # selected_events = seizure_df.loc[:10]
-        # print(f"Number of Seizure Events detected: {len(seizure_df)} ({fish['well'][0]}, {fish['genotype'][0]})")
-        #
-        # # Plot selected seizure events
-        # for _, event in selected_events.iterrows():
-        #     start, end = event["start"], event["end"]
-        #
-        #     # Extend the window by 5 frames before and after the event
-        #     start_idx = max(frame_indices.index(start) - 20, 0)
-        #     end_idx = min(frame_indices.index(end) + 20, len(frame_indices) - 1)
-        #
-        #     # Get the actual frame indices
-        #     # plot_start = frame_indices[start_idx]
-        #     # plot_end = frame_indices[end_idx]
-        #     plot_start = start_idx
-        #     plot_end = end_idx
-        #
-        #     # Extract subset of data for plotting
-        #     subset = fish.loc[plot_start:plot_end]
-        #
-        #     # Plot the selected event window
-        #     plt.figure(figsize=(8, 4))
-        #     plt.plot(subset.index, subset["data1"], color="blue", label="Activity Data")
-        #     plt.axvspan(start, end, color="red", alpha=0.1, label="'Potential Seizure' Event")
-        #
-        #     # Formatting
-        #     plt.axhline(y=upper_threshold, color='black', linestyle='--', label=f"Threshold ({upper_threshold})")
-        #     plt.axhline(y=lower_threshold, color='gray', linestyle=':', label=f"Baseline ({lower_threshold})")
-        #     plt.xlabel("Frame Index")
-        #     plt.ylabel("Δ Pixel")
-        #     plt.title(f"'Potential Seizure' Event from Frame {start} to {end} ({event['duration']})")
-        #     plt.legend()
-        #     plt.show()
+        # Convert 'duration' and 'IBI' to numeric immediately
+        seizure_df['duration'] = pd.to_numeric(seizure_df['duration'], errors='coerce')
+        seizure_df['IBI'] = pd.to_numeric(seizure_df['IBI'], errors='coerce')
+
         if plot:
-            self.plot_events(fish, frame_indices, upper_threshold, lower_threshold)
+            self.plot_events(fish, seizure_df, frame_indices, upper_threshold, lower_threshold)
 
 
-        return self.seizure_df
+        return seizure_df
 
-    def plot_events(self, fish, frame_indices, upper_threshold, lower_threshold):
+    def process_segments(self, segments, event_detection_params=None, save=True):
+        # Store results in a dictionary
+        segment_dfs = {}
+        base_name = f"{self.name}"
+        df_raw    = self.df
+
+        for label, start, end in segments:
+            seg_key = f"seg_{label}"
+            full_label = f"{base_name}_{label}"
+            seizure_key = f"all_seizure_df_{full_label}"
+            # full_label = f"{base_name}_{label}"
+
+            segment = df_raw[(df_raw['elapsed_time'] >= start) & (df_raw['elapsed_time'] <= end)]
+            seizure_df = self.generate_all_seizure_df(event_detection_params, data=segment, label=full_label, save=save)
+
+            segment_dfs[seg_key] = segment
+            segment_dfs[seizure_key] = seizure_df
+
+            print(f"Processed: {full_label}")
+
+        return segment_dfs
+
+
+    def generate_all_seizure_df(self, event_detection_params, data=None, label="all_seizure_df", save=False):
+        print('Generating all_seizure_df...')
+        if data is None:
+            data = self.df
+
+        print(event_detection_params)
+
+        if event_detection_params is None:
+            print("Default params used.")
+            upper_threshold=35
+            lower_threshold=2
+            min_frame_duration=25
+            min_ibi=3
+        else:
+            upper_threshold, lower_threshold, min_frame_duration, min_ibi = (event_detection_params[k] for k in ("upper_threshold", "lower_threshold", "min_frame_duration", "min_ibi"))
+
+
+
+        seizure_data = []
+
+        for (box, well) in data[['box', 'well']].drop_duplicates().itertuples(index=False):
+
+            fish_data = data[(data['box'] == box) & (data['well'] == well)].copy()
+            seizure_df = self.detect_seizures(fish_data, upper_threshold, lower_threshold, min_frame_duration, min_ibi)
+
+            seizure_df['box'] = box
+            seizure_df['well'] = well
+            seizure_df['genotype'] = fish_data['genotype'].iloc[0]  # Assume genotype is constant for a fish
+
+            if 'condition' in fish_data.columns:
+                seizure_df['condition'] = fish_data['condition'].iloc[0]
+
+            # Store in list
+            seizure_data.append(seizure_df)
+
+        # Combine all seizure event data into a single DataFrame
+        # self.all_seizure_df = pd.concat(seizure_data, ignore_index=True)
+        # print(Done, all_seizure_df is )
+        # return self.all_seizure_df
+
+        if data is None:
+            # Combine all seizure event data into a single DataFrame
+            self.all_seizure_df = pd.concat(seizure_data, ignore_index=True)
+            print("Done, all_seizure_df is now an attribute of the object.")
+            return self.all_seizure_df
+        else:
+            all_seizure_df = pd.concat(seizure_data, ignore_index=True)
+            if save:
+                all_seizure_df.to_csv(f'{self.path}{label}.csv', index=False)
+            print("Done")
+            return all_seizure_df
+
+    def plot_events(self, fish, seizure_df, frame_indices, upper_threshold, lower_threshold):
         # Select 5 random seizure events (if available)
-        num_events_to_plot = min(10, len(self.seizure_df))
-        selected_events = self.seizure_df.sample(n=num_events_to_plot, random_state=42)
+        num_events_to_plot = min(4, len(seizure_df))
+        selected_events = seizure_df.sample(n=num_events_to_plot, random_state=42)
         # selected_events = seizure_df.loc[:10]
-        print(f"Number of Seizure Events detected: {len(self.seizure_df)} ({fish['well'][0]}, {fish['genotype'][0]})")
+        print(f"Number of Seizure Events detected: {len(seizure_df)} ({fish['well'][0]}, {fish['genotype'][0]})")
 
         # Plot selected seizure events
         for _, event in selected_events.iterrows():
@@ -789,9 +1220,6 @@ class RawData(Experiment):
             start_idx = max(frame_indices.index(start) - 20, 0)
             end_idx = min(frame_indices.index(end) + 20, len(frame_indices) - 1)
 
-            # Get the actual frame indices
-            # plot_start = frame_indices[start_idx]
-            # plot_end = frame_indices[end_idx]
             plot_start = start_idx
             plot_end = end_idx
 
@@ -799,7 +1227,17 @@ class RawData(Experiment):
             subset = fish.loc[plot_start:plot_end]
 
             # Plot the selected event window
-            plt.figure(figsize=(8, 4))
+            plt.figure(figsize=(16, 8))
+
+            plt.rcParams.update({
+                'axes.titlesize': 30,     # subplot titles
+                'axes.labelsize': 30,     # x/y axis labels
+                'xtick.labelsize': 30,    # x-axis tick labels
+                'ytick.labelsize': 30,    # y-axis tick labels
+                'legend.fontsize': 28,    # legend text
+                'figure.titlesize': 36    # overall figure title (if used)
+            })
+
             plt.plot(subset.index, subset["data1"], color="blue", label="Activity Data")
             plt.axvspan(start, end, color="red", alpha=0.1, label="'Potential Seizure' Event")
 
@@ -808,10 +1246,22 @@ class RawData(Experiment):
             plt.axhline(y=lower_threshold, color='gray', linestyle=':', label=f"Baseline ({lower_threshold})")
             plt.xlabel("Frame Index")
             plt.ylabel("Δ Pixel")
-            plt.title(f"'Potential Seizure' Event from Frame {start} to {end} ({event['duration']})")
+            plt.title(f"'Potential Seizure' Event from Frame {start} to {end} ({event['duration']}, {fish['well'][0]}, {fish['genotype'][0]})", pad=25)
             plt.legend()
+
+
+            save_path = f"{self.path}{self.name}_event_{start}_{end}_{fish['well'][0]}.svg"
+            # Save as SVG
+            plt.savefig(save_path, format='svg', bbox_inches='tight')
+            print(f"Plot saved to: {save_path}")
+
             plt.show()
 
+    # def detect_normal_swim_bouts(self, fish, upper_threshold=35, lower_threshold=2, min_frame_duration=25, min_ibi=3, plot=False):
+    #
+    #
+    #
+    #     return normal_bouts_df
 
 class MiddurData(Experiment): #The output is not compatible with sleep analysis
     # def __init__(self, date, box1, box2, exp, export=False):
@@ -925,6 +1375,7 @@ class MiddurData(Experiment): #The output is not compatible with sleep analysis
 
     # Function to plot data for a single box
     def plot_box_data(self, data, box_id):
+        # data = self.prepped_data
         box_data = data[data['box'] == box_id].copy()
         print(box_data)
 
@@ -1021,6 +1472,290 @@ class MiddurData(Experiment): #The output is not compatible with sleep analysis
 
 
         return None
+
+    def plot_genotype_activity(self, bin_minutes=None, colors=None, use_filtered=False):
+            """
+            Plot mean middur ± SEM for each genotype over time.
+
+            Args:
+                bin_minutes: Optional int to bin time into larger intervals for smoother traces.
+                colors: Optional dict mapping genotype to color.
+                use_filtered: If True and self.omit is set, use prepped_filtered_data.
+            """
+
+            if use_filtered and self.omit is not None:
+                data = self.prepped_filtered_data.copy()
+            else:
+                data = self.prepped_data.copy()
+
+            # Drop NaN genotypes and empties
+            data = data[data['genotype'].notna() & ~data['genotype'].isin(['empty', 'NaN'])]
+
+            # if colors is None:
+            #     new_colors_order = sns.color_palette(palette='Set2', n_colors=3)
+            #     new_colors_order[0], new_colors_order[1], new_colors_order[2] = (
+            #         new_colors_order[1], new_colors_order[0], new_colors_order[2],
+            #     )
+            #     colors = dict(zip(['wt', 'het', 'hom'], new_colors_order))
+            if colors is None:
+                colors = {"wt": "#FFA500", "het": "#228B22", "hom": "#1E90FF"}
+
+            genotypes = [g for g in ['wt', 'het', 'hom'] if g in data['genotype'].str.lower().unique()]
+
+            fig, ax = plt.subplots(figsize=(10, 5))
+
+            for geno in genotypes:
+                subset = data[data['genotype'].str.lower() == geno].copy()
+                if subset.empty:
+                    continue
+
+                n_animals = subset['animal'].nunique()
+
+                if bin_minutes:
+                    bin_size = bin_minutes * 60
+                    subset['time_bin'] = (subset['start'] // bin_size) * bin_size
+                    # Sum middur within each bin per animal, then average across animals
+                    grouped = subset.groupby(['time_bin', 'animal'])['middur'].sum().reset_index()
+                    stats = grouped.groupby('time_bin')['middur'].agg(['mean', 'sem']).reset_index()
+                    x = stats['time_bin'] / 3600
+                else:
+                    stats = subset.groupby('start')['middur'].agg(['mean', 'sem']).reset_index()
+                    x = stats['start'] / 3600
+
+                color = colors.get(geno, 'gray')
+                ax.plot(x, stats['mean'], label=f'{geno.upper()} (n={n_animals})',
+                        color=color, linewidth=1.2)
+                ax.fill_between(x, stats['mean'] - stats['sem'], stats['mean'] + stats['sem'],
+                                alpha=0.1, color=color)
+
+            max_hours = data['start'].max() / 3600
+            ax.axvspan(14, max_hours, alpha=0.08, color='gray', label='Dark Period')
+            # ax.axvspan(1, 1 + 5/60, alpha=0.10, color='yellow', label='Light Stimulus Cycle')
+            ax.set_xlabel('Time (hours)')
+            ax.set_ylabel('Average Activity (middur; s/min)')
+            ax.legend()
+            total_mins = int(data['start'].max() / 60)
+            ax.set_title(f'Average Activity by Genotype — {self.exp} ({self.name}) [{total_mins} min]')
+            sns.set_theme(style="whitegrid")
+            plt.tight_layout()
+            plt.show()
+
+    def analyse_auc(self, use_filtered=False, epoch_bounds=None, colors=None):
+        """
+        Compare genotypes using Area Under Curve.
+
+        Args:
+            use_filtered: If True and self.omit is set, use prepped_filtered_data.
+            epoch_bounds: Optional dict of named epochs, e.g.
+                          {'baseline': (0, 3600), 'stimulus': (3600, 3900), 'post': (3900, 7200)}
+                          Values in seconds. If None, uses full experiment as one epoch.
+            colors: Optional dict mapping genotype to color.
+        """
+        from scipy import stats as sp_stats
+
+        if use_filtered and self.omit is not None:
+            data = self.prepped_filtered_data.copy()
+        else:
+            data = self.prepped_data.copy()
+
+        data = data[data['genotype'].notna() & ~data['genotype'].isin(['empty', 'NaN'])]
+        data['genotype'] = data['genotype'].str.lower()
+
+        if colors is None:
+            colors = {"wt": "#FFA500", "het": "#228B22", "hom": "#1E90FF"}
+
+        genotypes = [g for g in ['wt', 'het', 'hom'] if g in data['genotype'].unique()]
+
+        if epoch_bounds is None:
+            epoch_bounds = {'full': (data['start'].min(), data['start'].max())}
+
+        n_epochs = len(epoch_bounds)
+        fig, axes = plt.subplots(1, n_epochs, figsize=(5 * n_epochs, 5), squeeze=False)
+        axes = axes[0]
+
+        results = {}
+
+        for idx, (epoch_name, (t_start, t_end)) in enumerate(epoch_bounds.items()):
+            ax = axes[idx]
+            epoch_data = data[(data['start'] >= t_start) & (data['start'] <= t_end)]
+
+            # Calculate AUC per animal using trapezoidal rule
+            auc_per_animal = (
+                epoch_data.groupby(['genotype', 'animal'])
+                .apply(lambda g: np.trapz(g['middur'], g['start']))
+                .reset_index(name='auc')
+            )
+
+            # Statistical test
+            groups = [grp['auc'].values for _, grp in auc_per_animal.groupby('genotype') if len(grp) > 1]
+            group_labels = [name for name, grp in auc_per_animal.groupby('genotype') if len(grp) > 1]
+
+            # Normality check
+            all_normal = all(
+                sp_stats.shapiro(g)[1] > 0.05 for g in groups if len(g) >= 3
+            )
+
+            if all_normal and len(groups) >= 2:
+                stat, p = sp_stats.f_oneway(*groups)
+                test_name = 'One-way ANOVA'
+            else:
+                stat, p = sp_stats.kruskal(*groups)
+                test_name = 'Kruskal-Wallis'
+
+            results[epoch_name] = {
+                'test': test_name, 'statistic': stat, 'p_value': p,
+                'auc_data': auc_per_animal
+            }
+
+            # Post-hoc pairwise if significant
+            pairwise = {}
+            if p < 0.05 and len(groups) >= 2:
+                from itertools import combinations
+                pairs = list(combinations(group_labels, 2))
+                for g1, g2 in pairs:
+                    a = auc_per_animal[auc_per_animal['genotype'] == g1]['auc']
+                    b = auc_per_animal[auc_per_animal['genotype'] == g2]['auc']
+                    _, pw_p = sp_stats.mannwhitneyu(a, b, alternative='two-sided')
+                    pairwise[f'{g1} vs {g2}'] = pw_p
+                # Bonferroni correction
+                n_comp = len(pairwise)
+                pairwise = {k: min(v * n_comp, 1.0) for k, v in pairwise.items()}
+                results[epoch_name]['pairwise'] = pairwise
+
+            # Post-hoc pairwise (always run)
+            # from itertools import combinations
+            # pairwise = {}
+            # pairs = list(combinations(group_labels, 2))
+            # for g1, g2 in pairs:
+            #     a = auc_per_animal[auc_per_animal['genotype'] == g1]['auc']
+            #     b = auc_per_animal[auc_per_animal['genotype'] == g2]['auc']
+            #     _, pw_p = sp_stats.mannwhitneyu(a, b, alternative='two-sided')
+            #     pairwise[f'{g1} vs {g2}'] = pw_p
+            # # Bonferroni correction
+            # n_comp = len(pairwise)
+            # pairwise = {k: min(v * n_comp, 1.0) for k, v in pairwise.items()}
+            # results[epoch_name]['pairwise'] = pairwise
+
+            # Plot
+            for geno in genotypes:
+                geno_auc = auc_per_animal[auc_per_animal['genotype'] == geno]['auc']
+                color = colors.get(geno, 'gray')
+                positions = [genotypes.index(geno)]
+                bp = ax.boxplot(geno_auc, positions=positions, widths=0.5,
+                               patch_artist=True, showfliers=False)
+                bp['boxes'][0].set_facecolor(color)
+                bp['boxes'][0].set_alpha(0.4)
+                # Overlay individual points
+                jitter = np.random.normal(0, 0.05, size=len(geno_auc))
+                ax.scatter(np.array(positions * len(geno_auc)) + jitter, geno_auc,
+                          color=color, alpha=0.7, s=20, zorder=3)
+
+            ax.set_xticks(range(len(genotypes)))
+            ax.set_xticklabels([g.upper() for g in genotypes])
+            ax.set_ylabel('AUC (middur × seconds)')
+            ax.set_title(f'{epoch_name}\n{test_name}: p={p:.4f}')
+
+            # Add significance bars for pairwise
+            if 'pairwise' in results[epoch_name]:
+                y_max = ax.get_ylim()[1]
+                step = (ax.get_ylim()[1] - ax.get_ylim()[0]) * 0.08
+                for j, (pair, pw_p) in enumerate(results[epoch_name]['pairwise'].items()):
+                    g1, g2 = pair.split(' vs ')
+                    x1, x2 = genotypes.index(g1), genotypes.index(g2)
+                    y = y_max + step * (j + 1)
+                    star = '***' if pw_p < 0.001 else '**' if pw_p < 0.01 else '*' if pw_p < 0.05 else 'ns'
+                    ax.plot([x1, x2], [y, y], 'k-', linewidth=1)
+                    ax.text((x1 + x2) / 2, y, star, ha='center', va='bottom', fontsize=10)
+                    # ax.set_ylim(ax.get_ylim()[0], y_max + step * (len(results[epoch_name].get('pairwise', {})) + 2))
+        fig.suptitle(f'AUC Analysis — {self.exp} ({self.name})', fontsize=14)
+        plt.tight_layout()
+        plt.show()
+
+        # Print results summary
+        for epoch_name, res in results.items():
+            print(f"\n--- {epoch_name} ---")
+            print(f"  {res['test']}: stat={res['statistic']:.4f}, p={res['p_value']:.4f}")
+            if 'pairwise' in res:
+                for pair, pw_p in res['pairwise'].items():
+                    print(f"  {pair}: p={pw_p:.4f} (Bonferroni corrected)")
+
+        return results
+
+
+    def analyse_lmm(self, use_filtered=False, bin_minutes=None, epoch_bounds=None):
+        """
+        Linear mixed-effects model: middur ~ genotype * epoch + (1 | animal).
+
+        Args:
+            use_filtered: If True and self.omit is set, use prepped_filtered_data.
+            bin_minutes: Optional int to bin time before modelling (reduces data size).
+            epoch_bounds: Optional dict of named epochs in seconds, e.g.
+                          {'baseline': (0, 3600), 'stimulus': (3600, 3900), 'post': (3900, 7200)}.
+                          If None, genotype effect is tested across all time with no epoch interaction.
+        """
+        import statsmodels.formula.api as smf
+
+        if use_filtered and self.omit is not None:
+            data = self.prepped_filtered_data.copy()
+        else:
+            data = self.prepped_data.copy()
+
+        data = data[data['genotype'].notna() & ~data['genotype'].isin(['empty', 'NaN'])]
+        data['genotype'] = data['genotype'].str.lower()
+
+        # Optional time binning
+        if bin_minutes:
+            bin_size = bin_minutes * 60
+            data['time_bin'] = (data['start'] // bin_size) * bin_size
+            data = data.groupby(['animal', 'genotype', 'time_bin']).agg(
+                middur=('middur', 'sum')
+            ).reset_index()
+            data.rename(columns={'time_bin': 'start'}, inplace=True)
+
+        # Assign epochs if provided
+        if epoch_bounds:
+            def assign_epoch(t):
+                for name, (t_start, t_end) in epoch_bounds.items():
+                    if t_start <= t <= t_end:
+                        return name
+                return None
+            data['epoch'] = data['start'].apply(assign_epoch)
+            data = data[data['epoch'].notna()]
+
+            # Set reference categories
+            data['genotype'] = pd.Categorical(data['genotype'], categories=['wt', 'het', 'hom'])
+            epoch_names = list(epoch_bounds.keys())
+            data['epoch'] = pd.Categorical(data['epoch'], categories=epoch_names)
+
+            # Fit model with interaction
+            formula = 'middur ~ C(genotype) * C(epoch)'
+            print(f"Fitting LMM: {formula} + (1 | animal)")
+            model = smf.mixedlm(formula, data, groups=data['animal'])
+            result = model.fit()
+            print(result.summary())
+
+            # Also fit per-epoch for clearer interpretation
+            print("\n--- Per-epoch models ---")
+            for epoch_name in epoch_names:
+                epoch_data = data[data['epoch'] == epoch_name]
+                formula_epoch = 'middur ~ C(genotype)'
+                print(f"\n  Epoch: {epoch_name}")
+                print(f"  Fitting: {formula_epoch} + (1 | animal)")
+                model_epoch = smf.mixedlm(formula_epoch, epoch_data, groups=epoch_data['animal'])
+                result_epoch = model_epoch.fit()
+                print(result_epoch.summary())
+
+        else:
+            # Simple model: genotype effect across all time
+            data['genotype'] = pd.Categorical(data['genotype'], categories=['wt', 'het', 'hom'])
+
+            formula = 'middur ~ C(genotype)'
+            print(f"Fitting LMM: {formula} + (1 | animal)")
+            model = smf.mixedlm(formula, data, groups=data['animal'])
+            result = model.fit()
+            print(result.summary())
+
+        return result
 
 class MiddurData_SA(Experiment): #The output is compatible with sleep analysis
     # def __init__(self, date, box1, box2, exp, export=False):
@@ -1126,7 +1861,7 @@ class MiddurData_SA(Experiment): #The output is compatible with sleep analysis
 
     # Function to export the DataFrame as a .txt file
     def export_to_txt(self, final_df, date, path):
-        filename = os.path.join(path, f"{date}_00_DATA.csv")  # Construct the file path
+        filename = os.path.join(path, f"{date}_00_DATA.txt")  # Construct the file path
         final_df.to_csv(filename, sep='\t', index=False)  # Export DataFrame to .txt with tab separators
         print(f"File saved at: {filename}")  # Confirmation message
 
@@ -1191,19 +1926,21 @@ class KASP():
     #
     # results = b6.KASP(csv_files, omitted_wells, drop, display_list)
 
-    def __init__(self, csv_files, omitted_wells=None, drop_wells=None, controls=None, display_list=False):
-        self.csv_files     = csv_files
-        self.omitted_wells = {box: set(wells) for box, wells in (omitted_wells or {}).items()}
-        self.drop_wells    = {box: set(wells) for box, wells in (drop_wells or {}).items()}
-        self.controls      = {box: set(wells) for box, wells in (controls or {}).items()}
+    def __init__(self, files, omitted_wells=None, drop_wells=None, controls=None, display_list=False, direct=False):
+        self.files     = files
+        self.omitted_wells = {box: set(wells) for box, wells in (omitted_wells or {14:{}}).items()}
+        self.drop_wells    = {box: set(wells) for box, wells in (drop_wells or {14:{}}).items()}
+        self.controls      = {box: set(wells) for box, wells in (controls or {14:{}}).items()}
         self.display_list  = display_list
+        self.direct        = direct # This is True if the genotype data is manual (not from the auto-gen CSV from Thermofischer)
 
         # Dictionary to store processed data for each plate
         self.plates = {}
 
         # Load and process each file
-        for box_id, file_path in self.csv_files.items():
+        for box_id, file_path in self.files.items():
             self.plates[box_id] = self.load_data(box_id)
+            # print(self.plates[box_id])
             self.plot_allele_and_well_plate(box_id)
             if display_list:
                 self.print_grouped_well_lists(box_id, self.plates[box_id])
@@ -1211,16 +1948,26 @@ class KASP():
 
     def load_data(self, box_id):
         """Loads and preprocesses the data from the CSV file."""
-        data = pd.read_csv(self.csv_files[box_id], skiprows=23,
-                           usecols=["Well", "Well Position", "Sample", "Allele 1", "Allele 2", "Call"])
-        return data[~data['Well Position'].isin(self.drop_wells[box_id])]
+        if self.files[box_id].endswith('.eds'):
+            data = self.read_eds(self.files[box_id])
+            data = data.dropna(axis=0)
+            return data[~data['Well Position'].isin(self.drop_wells[box_id])]
+        else:
+            if self.direct:
+                data = pd.read_csv(self.files[box_id],
+                                   usecols=["Well Position", "Genotype"])
+                return data
+            else:
+                data = pd.read_csv(self.files[box_id], skiprows=23,
+                               usecols=["Well", "Well Position", "Sample", "Allele 1", "Allele 2", "Call"])
+                return data[~data['Well Position'].isin(self.drop_wells[box_id])]
 
     def perform_clustering(self, data, box_id):
         """Clusters the data into WT, HET, and HOM using K-means."""
+
         # Define omitted wells before clustering
         valid_wells = ~data['Well Position'].isin(self.omitted_wells[box_id])
-
-        # print("Omitted: ",self.omitted_wells[box_id])
+        print("Omitted: ",self.omitted_wells[box_id])
 
         # Extract only valid data for clustering
         X = data.loc[valid_wells, ['Allele 1', 'Allele 2']]
@@ -1249,13 +1996,17 @@ class KASP():
         data.loc[~valid_wells, ['Cluster', 'Genotype']] = np.nan
 
 
+
     def plot_allele_and_well_plate(self, box_id):
+
         data = self.plates[box_id]
 
         """Generates allele discrimination and 96-well plate plots."""
-        self.perform_clustering(data, box_id)
-        file_name = Path(self.csv_files[box_id]).stem
+        if not self.direct:
+            self.perform_clustering(data, box_id)
+        file_name = Path(self.files[box_id]).stem
         print(file_name)
+
         updated_colors = {'WT': '#ff7f0e', 'HET': '#2ca02c', 'HOM': '#1f77b4'}
         data['Color'] = data['Genotype'].map(updated_colors)
 
@@ -1264,16 +2015,17 @@ class KASP():
         # Set up the figure with two subplots (for Allele plot and 96-well visualization)
         fig, axs = plt.subplots(1, 2, figsize=(20, 6))
 
-        # Allele Discrimination Plot
-        ax1 = axs[0]
-        for index, row in data.iterrows():
-            well_pos = row['Well Position']
-            color = 'black' if well_pos in self.omitted_wells[box_id] else updated_colors[row['Genotype']]
-            ax1.scatter(row['Allele 1'], row['Allele 2'], color=color)
-        for i, txt in enumerate(data['Well Position']):
-            ax1.annotate(txt, (data['Allele 1'].iloc[i], data['Allele 2'].iloc[i]), fontsize=8)
-        ax1.set(title=f'{file_name}: Allele Discrimination Plot', xlabel='Allele 1', ylabel='Allele 2')
-        ax1.grid(True)
+        if not self.direct:
+            # Allele Discrimination Plot
+            ax1 = axs[0]
+            for index, row in data.iterrows():
+                well_pos = row['Well Position']
+                color = 'black' if well_pos in self.omitted_wells[box_id] else updated_colors[row['Genotype']]
+                ax1.scatter(row['Allele 1'], row['Allele 2'], color=color)
+            for i, txt in enumerate(data['Well Position']):
+                ax1.annotate(txt, (data['Allele 1'].iloc[i], data['Allele 2'].iloc[i]), fontsize=8)
+            ax1.set(title=f'{file_name}: Allele Discrimination Plot', xlabel='Allele 1', ylabel='Allele 2')
+            ax1.grid(True)
 
         # 96-Well Plate Visualization
         ax2 = axs[1]
@@ -1284,7 +2036,8 @@ class KASP():
                 color = 'white'  # Default for empty wells
                 if well_pos in data['Well Position'].values:
                     row = data[data['Well Position'] == well_pos].iloc[0]
-                    color = 'black' if well_pos in self.omitted_wells[box_id] else updated_colors[row['Genotype']]
+                    if not self.direct:
+                        color = 'black' if well_pos in self.omitted_wells[box_id] else updated_colors[row['Genotype']]
                 ax2.add_patch(mpatches.Rectangle((col_label - 1, rows.index(row_label)), 1, 1, facecolor=color, edgecolor='black'))
         ax2.set(xlim=(0, 12), ylim=(0, 8), xticks=np.arange(12) + 0.5, yticks=np.arange(8) + 0.5,
                 xticklabels=columns, yticklabels=rows, title=f'{file_name}: 96-Well Plate Calls')
@@ -1298,6 +2051,9 @@ class KASP():
         ax2.legend(handles=legend_patches, loc='upper right')
 
         plt.tight_layout()
+
+        plt.savefig('kasp.png', transparent=True)
+
         plt.show()
 
     def get_grouped_well_lists(self, box_id, data):
@@ -1390,15 +2146,65 @@ class KASP():
         return df_filtered
 
 
-    def save_geno_file_SA(self, output_file):
-        """
-        FOR MATLAB Sleep Analysis.Generate genotype text files from the interpreted data.
+    # def save_geno_file_SA(self, plate, output_file):
+    #     """
+    #     SINGLE PLATES
+    #     FOR MATLAB Sleep Analysis.Generate genotype text files from the interpreted data.
+    #
+    #     Args:
+    #         output_file (str): Path to save the generated genotype file.
+    #     """
+    #
+    #     # Map well positions (e.g., A1 to 1, H12 to 96)
+    #     well_to_numeric = {
+    #         f"{row}{col}": idx
+    #         for idx, (row, col) in enumerate(
+    #             [(row, col) for row in 'ABCDEFGH' for col in range(1, 13)], start=1
+    #         )
+    #     }
+    #
+    #     data = self.plates[plate]
+    #     # Map numeric well positions in the data
+    #     data['Numeric Well'] = data['Well Position'].map(well_to_numeric)
+    #
+    #     # Group numeric wells by genotype
+    #     grouped_wells = {
+    #         genotype: data[data['Genotype'] == genotype]['Numeric Well'].tolist()
+    #         for genotype in ['WT', 'HET', 'HOM']
+    #     }
+    #
+    #     # Pad each list to the maximum length
+    #     max_length = max(len(values) for values in grouped_wells.values())
+    #     data_padded = {key: values + [None] * (max_length - len(values)) for key, values in grouped_wells.items()}
+    #
+    #     # Create a DataFrame
+    #     df = pd.DataFrame(data_padded).fillna("")
+    #
+    #     # Convert all numbers to integers where applicable
+    #     df = df.apply(lambda col: col.map(lambda x: int(x) if isinstance(x, float) or isinstance(x, int) else x))
+    #
+    #     # Define the new header
+    #     new_header = ['genotype1', 'genotype1', 'genotype1']
+    #     genotypes = ['WT', 'HET', 'HOM']
+    #
+    #     # Push the original header down by appending it as the first row
+    #     df.columns = [genotypes[i] for i in range(len(df.columns))]  # Temporary column names
+    #     df.loc[-1] = df.columns  # Add the original header as a row
+    #     df.index = df.index + 1  # Shift index
+    #     df = df.sort_index()  # Sort index to place the new row at the top
+    #
+    #     # Replace the header with the new header
+    #     df.columns = new_header
+    #
+    #
+    #     # Save the DataFrame to a .txt file with tab-separated values
+    #     df.to_csv(f"{output_file}genotype.txt", index=False, sep='\t')
+    #
+    #     # Confirmation message
+    #     print(f"DataFrame saved to {output_file}")
 
-        Args:
-            output_file (str): Path to save the generated genotype file.
-        """
+    def produce_geno_file(self, output_file, merged=False):
 
-        # Map well positions (e.g., A1 to 1, H12 to 96)
         well_to_numeric = {
             f"{row}{col}": idx
             for idx, (row, col) in enumerate(
@@ -1406,41 +2212,217 @@ class KASP():
             )
         }
 
-        # Map numeric well positions in the data
-        self.data['Numeric Well'] = self.data['Well Position'].map(well_to_numeric)
+        def _build_geno_df(df, offset=0):
+            df = df.copy()
+            df['Numeric Well'] = df['Well Position'].map(well_to_numeric) + offset
+            grouped_wells = {
+                geno: df[df['Genotype'] == geno]['Numeric Well'].tolist()
+                for geno in ['WT', 'HET', 'HOM']
+            }
+            max_length = max(len(v) for v in grouped_wells.values()) if grouped_wells else 0
+            padded = {k: v + [None] * (max_length - len(v)) for k, v in grouped_wells.items()}
+            out = pd.DataFrame(padded).fillna("")
+            out = out.apply(lambda col: col.map(lambda x: int(x) if isinstance(x, (float, int)) and x != 0 else x))
+            # Push header down as first row
+            out.columns = ['WT', 'HET', 'HOM']
+            out.loc[-1] = out.columns
+            out.index = out.index + 1
+            out = out.sort_index()
+            out.columns = ['genotype1', 'genotype1', 'genotype1']
+            return out
 
-        # Group numeric wells by genotype
-        grouped_wells = {
-            genotype: self.data[self.data['Genotype'] == genotype]['Numeric Well'].tolist()
-            for genotype in ['WT', 'HET', 'HOM']
-        }
+        if merged:
+            chunks = []
+            for i, plate_idx in enumerate(sorted(self.plates.keys())):
+                plate_df = self.plates[plate_idx].copy()
+                plate_df['Numeric Well'] = plate_df['Well Position'].map(well_to_numeric) + i * 96
+                chunks.append(plate_df)
+            combined = pd.concat(chunks, ignore_index=True)
+            # Use _build_geno_df logic but with pre-computed numeric wells
+            grouped_wells = {
+                geno: combined[combined['Genotype'] == geno]['Numeric Well'].tolist()
+                for geno in ['WT', 'HET', 'HOM']
+            }
+            max_length = max(len(v) for v in grouped_wells.values()) if grouped_wells else 0
+            padded = {k: v + [None] * (max_length - len(v)) for k, v in grouped_wells.items()}
+            df = pd.DataFrame(padded).fillna("")
+            df = df.apply(lambda col: col.map(lambda x: int(x) if isinstance(x, (float, int)) and x != 0 else x))
+            df.columns = ['WT', 'HET', 'HOM']
+            df.loc[-1] = df.columns
+            df.index = df.index + 1
+            df = df.sort_index()
+            df.columns = ['genotype1', 'genotype1', 'genotype1']
+            output_path = f"{output_file}genotype.txt"
+            df.to_csv(output_path, index=False, sep='\t')
+            print(f"Merged genotype file saved to {output_path}")
+        else:
+            for plate_idx in sorted(self.plates.keys()):
+                df = _build_geno_df(self.plates[plate_idx])
+                output_path = f"{output_file}_plate{plate_idx}_genotype.txt"
+                df.to_csv(output_path, index=False, sep='\t')
+                print(f"Plate {plate_idx} genotype file saved to {output_path}")
 
-        # Pad each list to the maximum length
-        max_length = max(len(values) for values in grouped_wells.values())
-        data_padded = {key: values + [None] * (max_length - len(values)) for key, values in grouped_wells.items()}
-
-        # Create a DataFrame
-        df = pd.DataFrame(data_padded).fillna("")
-
-        # Convert all numbers to integers where applicable
-        df = df.apply(lambda col: col.map(lambda x: int(x) if isinstance(x, float) or isinstance(x, int) else x))
-
-        # Define the new header
-        new_header = ['genotype1', 'genotype1', 'genotype1']
-        genotypes = ['WT', 'HET', 'HOM']
-
-        # Push the original header down by appending it as the first row
-        df.columns = [genotypes[i] for i in range(len(df.columns))]  # Temporary column names
-        df.loc[-1] = df.columns  # Add the original header as a row
-        df.index = df.index + 1  # Shift index
-        df = df.sort_index()  # Sort index to place the new row at the top
-
-        # Replace the header with the new header
-        df.columns = new_header
+    def _well_index_to_position(self, index, cols=12):
+        """Convert 0-based well index to position string, e.g. 0 -> 'A1', 13 -> 'B2'."""
+        row = index // cols
+        col = index % cols + 1
+        return f"{chr(65 + row)}{col}"
 
 
-        # Save the DataFrame to a .txt file with tab-separated values
-        df.to_csv(f"{output_file}genotype.txt", index=False, sep='\t')
+    def read_eds(self, filepath):
+        """
+        Read a QuantStudio .eds file and return a DataFrame matching
+        the Genotyping Results CSV export.
 
-        # Confirmation message
-        print(f"DataFrame saved to {output_file}")
+        Parameters
+        ----------
+        filepath : str or pathlib.Path
+            Path to the .eds file.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: Well, Well Position, Sample, Allele 1, Allele 2, Call
+            - Well: 1-based well number (int)
+            - Well Position: e.g. 'A1', 'H12' (str)
+            - Sample: sample name from plate setup (str)
+            - Allele 1: FAM Rn = FAM_signal / ROX_signal (float)
+            - Allele 2: VIC Rn = VIC_signal / ROX_signal (float)
+            - Call: empty string (calls are computed by TF software, not stored in .eds)
+        """
+        with zipfile.ZipFile(filepath, "r") as zf:
+            # ── 1. Plate setup: well → sample name ──────────────────────
+            with zf.open("setup/plate_setup.json") as f:
+                plate_setup = json.load(f)
+
+            well_sample = {}
+            for w in plate_setup.get("wells", []):
+                well_sample[w["index"]] = w.get("sampleName", "")
+
+            # Determine allele-to-dye mapping from SNP assay definition
+            snp_assays = plate_setup.get("snpAssays", [])
+            if snp_assays:
+                allele1_reporter = snp_assays[0]["allele1"]["reporter"]  # e.g. "FAM"
+                allele2_reporter = snp_assays[0]["allele2"]["reporter"]  # e.g. "VIC"
+            else:
+                allele1_reporter = "FAM"
+                allele2_reporter = "VIC"
+
+            passive_ref = plate_setup.get("passiveReference", "ROX")
+
+            # ── 2. Multicomponent data: raw fluorescence signals ────────
+            with zf.open("apldbio/sds/multicomponentdata.xml") as f:
+                mc_tree = ET.parse(f)
+            mc_root = mc_tree.getroot()
+
+            well_count = int(mc_root.findtext("WellCount", "96"))
+
+            # Build a per-well dye order lookup.
+            # Most files have identical dye lists per well, but we check
+            # each well in case they differ.
+            well_dye_orders = {}
+            for dd in mc_root.findall(".//DyeData"):
+                widx = int(dd.get("WellIndex"))
+                dye_text = dd.find("DyeList").text  # e.g. "[FAM,ROX,VIC]"
+                dye_order = [d.strip() for d in dye_text.strip("[]").split(",")]
+                well_dye_orders[widx] = dye_order
+
+            # ── 3. Extract Rn values per well ───────────────────────────
+            rows = []
+
+            for well_idx in range(well_count):
+                signal = mc_root.find(f".//SignalData[@WellIndex='{well_idx}']")
+                if signal is None:
+                    # Well has no signal data — include with NaN values
+                    rows.append({
+                        "Well": well_idx + 1,
+                        "Well Position": _well_index_to_position(well_idx),
+                        "Sample": well_sample.get(well_idx, ""),
+                        "Allele 1": float("nan"),
+                        "Allele 2": float("nan"),
+                        "Call": "",
+                    })
+                    continue
+
+                cycle_data = signal.findall("CycleData")
+                dye_order = well_dye_orders.get(well_idx)
+
+                if dye_order is None or len(cycle_data) == 0:
+                    rows.append({
+                        "Well": well_idx + 1,
+                        "Well Position": self._well_index_to_position(well_idx),
+                        "Sample": well_sample.get(well_idx, ""),
+                        "Allele 1": float("nan"),
+                        "Allele 2": float("nan"),
+                        "Call": "",
+                    })
+                    continue
+
+                # Validate that we have enough CycleData for all dyes
+                if len(cycle_data) != len(dye_order):
+                    raise ValueError(
+                        f"Well {well_idx} ({_well_index_to_position(well_idx)}): "
+                        f"expected {len(dye_order)} CycleData entries for dyes "
+                        f"{dye_order}, but found {len(cycle_data)}. "
+                        f"Use debug_eds() to inspect this file."
+                    )
+
+                # Build dye_name -> signal mapping
+                dye_signals = {}
+                for dye_name, cd in zip(dye_order, cycle_data):
+                    vals = [float(v) for v in cd.text.strip("[]").split(",")]
+                    dye_signals[dye_name] = vals[-1]  # last step value
+
+                ref_signal = dye_signals.get(passive_ref, 0.0)
+                allele1_signal = dye_signals.get(allele1_reporter, 0.0)
+                allele2_signal = dye_signals.get(allele2_reporter, 0.0)
+
+                # Rn = dye_signal / passive_reference_signal
+                allele1_rn = allele1_signal / ref_signal if ref_signal != 0 else 0.0
+                allele2_rn = allele2_signal / ref_signal if ref_signal != 0 else 0.0
+
+                rows.append({
+                    "Well": well_idx + 1,  # 1-based to match CSV
+                    "Well Position": self._well_index_to_position(well_idx),
+                    "Sample": well_sample.get(well_idx, ""),
+                    "Allele 1": allele1_rn,
+                    "Allele 2": allele2_rn,
+                    "Call": "",
+                })
+
+        return pd.DataFrame(rows)
+
+import subprocess
+import os
+
+class Video():
+
+    def __init__(self, base_name):
+        self.base_name = base_name
+
+    def convert_avi_to_mp4(self):
+
+        input_avi = f"{base_name}/{base_name}_Box1_0001.avi"
+        converted_mp4 = f"{base_name}/{base_name}_Box1_0001_converted.mp4"
+        output_dir = f"{base_name}/video_segments"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Step 1: Convert full AVI to MP4
+        if not os.path.exists(converted_mp4):
+            print("🎬 Converting full AVI to MP4...")
+            conversion_command = [
+                "ffmpeg",
+                "-i", input_avi,
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                "-y",  # Overwrite if exists
+                converted_mp4
+            ]
+            subprocess.run(conversion_command, check=True)
+        else:
+            print("✅ MP4 conversion already exists. Skipping.")
+
+    def overlay_genotype(self):
+
+        return None
